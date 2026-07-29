@@ -1,0 +1,18 @@
+services:
+  tap-proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    platform: linux/amd64
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      LANG: C
+      LC_ALL: C
+    ports:
+      - "${ZMQ_PUB_PORT:-5575}:${ZMQ_PUB_PORT:-5575}"
+      - "${ZMQ_REP_PORT:-5576}:${ZMQ_REP_PORT:-5576}"
+    volumes:
+      - ./flow:/app/flow
+      - ./logs:/app/logs
