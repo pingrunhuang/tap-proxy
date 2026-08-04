@@ -117,7 +117,8 @@ COMEX:F:GC:2608
     "account_ready": true,
     "initial_sync_ready": true,
     "implementation": "native_tap_session",
-    "order_mapping_persistent": false
+    "order_mapping_persistent": true,
+    "order_store_healthy": true
   },
   "published_queue_size": 0,
   "pub_port": 5575,
@@ -182,6 +183,21 @@ PUB/SUB 恢复状态；重连后必须调用查询命令获取快照。
 
 `client_id + strategy_id + client_order_id` 是幂等键，三者均为必填。重复请求
 不得导致第二次向 TAP 发单。
+
+下单响应的 `data.message` 返回已持久化的失败原因；成功订单以及没有失败
+原因的订单返回空字符串。示例：
+
+```json
+{
+  "accepted": true,
+  "duplicate": true,
+  "client_order_id": "gc-arb-20260728-000001",
+  "tap_client_order_no": "",
+  "recovery_required": true,
+  "status": "SUBMIT_FAILED",
+  "message": "TAP insertOrder failed: 42"
+}
+```
 
 `direction`：
 
@@ -394,24 +410,31 @@ Topic：`positions.<account_id>`，`event` 为 `position`。
 - 客户端必须拒绝高于自身支持范围的版本。
 - 未知 JSON 字段应被忽略，未知 action 和枚举值必须返回错误。
 
-## 7. Phase-3 implementation boundary
+## 7. Phase-4/5 implementation boundary
 
-v1 action 已全部接入原生 TAP Session。当前进程内实现：
+v1 action 已全部接入原生 TAP Session。当前实现：
 
 - MD/TD 登录和初始资金、持仓、委托同步
 - 动态行情订阅和引用计数
 - 资金、持仓和委托查询
 - 下单、延迟撤单以及异步订单和成交事件
-- 进程内订单幂等
+- PostgreSQL 跨进程重启订单幂等
+- TAP `ClientOrderNo`、`OrderNo + ServerFlag` 和策略归属恢复
 - 断线状态事件和指数退避重连
+- 交易引擎侧 ZeroMQ TAP Gateway；客户端不依赖 `vnpy-tap`
 
-第 4 步以前，以下数据只存在内存：
+以下数据写入 PostgreSQL：
 
 - `client_id + strategy_id + client_order_id` 幂等键
 - TAP `ClientOrderNo`
 - TAP `OrderNo + ServerFlag`
 - 订单 Offset 和策略归属
 
-因此 Proxy 重启后可以查询整个账户的订单和持仓，但无法可靠恢复旧订单的
-策略归属和撤单映射。`status.data.session.order_mapping_persistent` 在完成
-持久化以前固定为 `false`。
+因此 Proxy 重启后可恢复旧订单的策略归属和撤单映射。
+`status.data.session.order_mapping_persistent` 为 `true`；
+`order_store_healthy` 表示当前数据库连接是否可用。
+
+报单前会先创建 `PENDING_SUBMIT` 记录，再调用 TAP 原生 API。若进程在柜台
+接受报单后、写回 `ClientOrderNo` 前崩溃，同一幂等键不会自动重放，而是
+返回 `recovery_required=true`。运维人员必须先用柜台委托查询结果完成核对，
+再决定后续处理，以免产生重复订单。

@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from config import Settings
+from order_store import MemoryOrderStore
 from tap_session import (
     ORDER_TYPE_LIMIT,
     SIDE_BUY,
@@ -138,6 +139,12 @@ class FakeTdApi:
 
     def exit(self):
         self.closed = True
+
+
+class FakeRejectedTdApi(FakeTdApi):
+    def insertOrder(self, request):
+        self.insert_requests.append(request)
+        return 42, 10, b""
 
 
 def make_settings(tmp_path: Path) -> Settings:
@@ -320,7 +327,9 @@ def test_place_order_is_idempotent_and_cancel_waits_for_order_mapping(
     first = session.place_order(request)
     duplicate = session.place_order(request)
     assert first["tap_client_order_no"] == "NATIVE-1"
+    assert first["message"] == ""
     assert duplicate["duplicate"] is True
+    assert duplicate["message"] == ""
     assert len(session.td_api.insert_requests) == 1
     assert session.td_api.insert_requests[0]["OrderType"] == ORDER_TYPE_LIMIT
 
@@ -358,6 +367,38 @@ def test_place_order_is_idempotent_and_cancel_waits_for_order_mapping(
     ]
     assert account_order_events[-1][2]["client_order_id"] == "gc-arb-1"
     assert strategy_order_events
+
+
+def test_failed_order_duplicate_returns_failure_message(tmp_path):
+    request = {
+        "client_id": "engine-01",
+        "strategy_id": "gc-arb",
+        "client_order_id": "gc-arb-failed-1",
+        "symbol": SYMBOL,
+        "direction": "BUY",
+        "offset": "OPEN",
+        "price": 2400.5,
+        "volume": 1,
+    }
+    session = NativeTapSession(
+        make_settings(tmp_path),
+        lambda *_args: None,
+        md_factory=FakeMdApi,
+        td_factory=FakeRejectedTdApi,
+        native_available=True,
+    )
+    try:
+        assert session.connect(0.5)
+        with pytest.raises(RuntimeError, match="TAP insertOrder failed: 42"):
+            session.place_order(request)
+
+        duplicate = session.place_order(request)
+        assert duplicate["accepted"] is True
+        assert duplicate["duplicate"] is True
+        assert duplicate["status"] == "SUBMIT_FAILED"
+        assert duplicate["message"] == "TAP insertOrder failed: 42"
+    finally:
+        session.close()
 
 
 def test_fill_uses_order_identity_and_publishes_strategy_topic(native_session):
@@ -415,6 +456,75 @@ def test_fill_uses_order_identity_and_publishes_strategy_topic(native_session):
     ]
     assert strategy_trades[-1]["client_order_id"] == "gc-arb-2"
     assert strategy_trades[-1]["offset"] == "OPEN"
+
+
+def test_persistent_store_restores_idempotency_and_cancel_mapping(tmp_path):
+    store = MemoryOrderStore()
+    store.persistent = True
+    request = {
+        "client_id": "engine-01",
+        "strategy_id": "gc-arb",
+        "client_order_id": "gc-arb-restart-1",
+        "symbol": SYMBOL,
+        "direction": "BUY",
+        "offset": "OPEN",
+        "price": 2400.5,
+        "volume": 1,
+    }
+    first = NativeTapSession(
+        make_settings(tmp_path),
+        lambda *_args: None,
+        md_factory=FakeMdApi,
+        td_factory=FakeTdApi,
+        native_available=True,
+        order_store=store,
+    )
+    assert first.connect(0.5)
+    first.place_order(request)
+    first.on_order(
+        {
+            "ErrorCode": 0,
+            "AccountNo": "TAP-ACCOUNT",
+            "ClientOrderNo": "NATIVE-1",
+            "OrderNo": "ORDER-RESTART-1",
+            "ServerFlag": "S",
+            "ExchangeNo": "COMEX",
+            "CommodityType": "F",
+            "CommodityNo": "GC",
+            "ContractNo": "2608",
+            "OrderSide": SIDE_BUY,
+            "OrderPrice": 2400.5,
+            "OrderQty": 1,
+            "OrderMatchQty": 0,
+            "OrderState": "0",
+        }
+    )
+    first.close()
+
+    restored = NativeTapSession(
+        make_settings(tmp_path),
+        lambda *_args: None,
+        md_factory=FakeMdApi,
+        td_factory=FakeTdApi,
+        native_available=True,
+        order_store=store,
+    )
+    try:
+        assert restored.connect(0.5)
+        duplicate = restored.place_order(request)
+        assert duplicate["duplicate"] is True
+        assert duplicate["tap_client_order_no"] == "NATIVE-1"
+        assert duplicate["message"] == ""
+        assert restored.td_api.insert_requests == []
+        assert restored.status()["order_mapping_persistent"] is True
+
+        cancelled = restored.cancel_order(request)
+        assert cancelled["pending"] is False
+        assert restored.td_api.cancel_requests == [
+            {"OrderNo": "ORDER-RESTART-1", "ServerFlag": "S"}
+        ]
+    finally:
+        restored.close()
 
 
 def test_unavailable_native_library_fails_before_connecting(tmp_path):

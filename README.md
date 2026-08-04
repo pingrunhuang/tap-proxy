@@ -3,7 +3,7 @@
 独立的 TAP 接入服务。目标是由一个进程持有 TAP MD/TD 会话，通过 ZeroMQ
 向多个交易引擎和策略提供行情与交易能力。
 
-当前完成拆分计划的第 1～3 步：
+当前已完成拆分计划的第 1～5 步：
 
 - TAP Proxy v1 协议已经冻结，详见
   [`docs/protocol-v1.md`](docs/protocol-v1.md)。
@@ -12,11 +12,12 @@
   撤单和断线重连。
 - TAP 回调已经转换为协议字典，不依赖交易引擎的数据模型。
 - v1 的健康检查、行情订阅、查询、下单和撤单命令均已接入 Session。
+- PostgreSQL 持久化订单身份、TAP `ClientOrderNo` 以及
+  `OrderNo + ServerFlag`，服务重启后可恢复幂等和撤单映射。
+- `multi-market-trading-engine` 的 TAP Gateway 已改为 ZeroMQ 客户端，
+  引擎侧不再安装或加载 `vnpy-tap`。
 - macOS 通过假原生 API 运行单元测试；真实 Session 运行在 Linux x86_64
   或 Windows。
-
-第 4 步尚未完成：订单身份和 TAP `OrderNo + ServerFlag` 映射当前只保存在
-内存。服务重启后不能恢复旧订单撤单能力，因此暂不应直接用于生产交易。
 
 ## 架构
 
@@ -24,7 +25,7 @@
 TAP MD/TD Front ----------> TAP native session
                                   |
                                   v
-                            tap-proxy
+                       tap-proxy <----> PostgreSQL
                          PUB:5575  REP:5576
                               |       |
                               +-------+---- trading engines / strategies
@@ -53,7 +54,7 @@ uv run pytest -q
 
 ```bash
 cp .env.example .env
-# 填写真实 TAP MD/TD 配置
+# 填写真实 TAP MD/TD 配置和 PostgreSQL 连接
 uv sync
 uv pip install importlib-metadata==8.7.0
 uv run python src/main.py
@@ -88,7 +89,7 @@ uv run python src/market_data_example.py LME:F:NI:3M \
 
 ```bash
 cp .env.example .env
-# 填写真实 TAP MD/TD 配置
+# 填写真实 TAP MD/TD 配置，并修改 POSTGRES_PASSWORD
 docker compose up --build -d
 docker compose logs -f
 ```
@@ -105,7 +106,19 @@ docker compose run --rm --no-deps tap-proxy \
 Apple Silicon Mac 上预期输出
 `arch=x86_64 vnpy-tap-native=ok`。首次构建需要下载 vn.py 的较大运行时
 依赖，后续构建会复用 Docker 缓存。镜像已经包含 TAP 所需的 OpenSSL 1.1
-兼容库。
+兼容库。Compose 会同时启动 PostgreSQL，数据库健康后才启动 TAP Proxy；
+订单映射保存在 `postgres-data` 命名卷中。
+
+交易引擎只需要连接 Proxy，不再填写 TAP 柜台账号：
+
+```env
+ENABLE_TAP=true
+TAP_PROXY_HOST=<tap-proxy-host>
+TAP_PROXY_PUB_PORT=5575
+TAP_PROXY_REP_PORT=5576
+TAP_PROXY_CLIENT_ID=multi-market-engine
+TAP_PROXY_STRATEGY_ID=default
+```
 
 默认端口刻意避开现有 `ibkr-proxy` 和 `ctp-proxy`：
 
@@ -131,5 +144,7 @@ Apple Silicon Mac 上预期输出
 ## 当前安全边界
 
 ZeroMQ 接口尚未实现身份认证，部署时必须只在私有网络开放端口。订单映射
-尚未持久化；进程内重复 `client_id + strategy_id + client_order_id` 会被
-幂等处理，但重启后的幂等和撤单恢复必须等第 4 步完成。
+已经持久化；重复的 `client_id + strategy_id + client_order_id` 会跨重启
+幂等处理。若进程在柜台接受报单后、Proxy 写回 `ClientOrderNo` 前崩溃，
+该记录会保持 `PENDING_SUBMIT` 并拒绝自动重放，需先与柜台委托查询结果人工
+核对，避免重复下单。

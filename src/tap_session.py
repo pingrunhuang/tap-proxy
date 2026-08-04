@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from loguru import logger
 
 from config import Settings
+from order_store import MemoryOrderStore, OrderStore
 from protocol import (
     Direction,
     Event,
@@ -387,6 +388,7 @@ class NativeTapSession:
         md_factory: ApiFactory | None = None,
         td_factory: ApiFactory | None = None,
         native_available: bool | None = None,
+        order_store: OrderStore | None = None,
     ) -> None:
         self.settings = settings
         self.publish = publish
@@ -399,6 +401,7 @@ class NativeTapSession:
         self._md_factory = md_factory or TapQuoteApi
         self._td_factory = td_factory or TapTradeApi
         self.timezone = ZoneInfo(settings.tap_timezone)
+        self.order_store = order_store or MemoryOrderStore()
 
         self.md_api: Any | None = None
         self.td_api: Any | None = None
@@ -423,9 +426,10 @@ class NativeTapSession:
         self._identity_by_native: dict[str, OrderIdentity] = {}
         self._native_by_identity: dict[tuple[str, str, str], str] = {}
         self._order_no_by_native: dict[str, str] = {}
-        self._native_by_order_no: dict[str, str] = {}
-        self._server_flag_by_order_no: dict[str, str] = {}
+        self._native_by_order_key: dict[tuple[str, str], str] = {}
+        self._server_flag_by_native: dict[str, str] = {}
         self._pending_cancels: set[str] = set()
+        self._restore_order_mappings()
 
         self._account_cache: dict[str, Any] = {}
         self._position_cache: dict[tuple[str, str], dict[str, Any]] = {}
@@ -561,7 +565,8 @@ class NativeTapSession:
             "reconnect_attempts": self.reconnect_attempts,
             "last_error": self.last_error,
             "implementation": "native_tap_session",
-            "order_mapping_persistent": False,
+            "order_mapping_persistent": self.order_store.persistent,
+            "order_store_healthy": self.order_store.is_healthy(),
         }
 
     def run_callback(
@@ -833,9 +838,13 @@ class NativeTapSession:
         if native_id and order_no:
             with self._mapping_lock:
                 self._order_no_by_native[native_id] = order_no
-                self._native_by_order_no[order_no] = native_id
-                self._server_flag_by_order_no[order_no] = server_flag
+                self._native_by_order_key[(order_no, server_flag)] = native_id
+                self._server_flag_by_native[native_id] = server_flag
         identity = self._identity_by_native.get(native_id)
+        if identity is None and native_id:
+            record = self.order_store.find_by_native(native_id)
+            if record:
+                identity = self._hydrate_record(record)
         symbol = self._canonical_from_data(data, "ContractNo")
         direction = self._direction(data.get("OrderSide"))
         if not symbol or not direction:
@@ -848,6 +857,13 @@ class NativeTapSession:
                 OrderStatus.UNKNOWN.value,
             )
         )
+        if native_id:
+            self.order_store.update_tap(
+                tap_client_order_no=native_id,
+                tap_order_no=order_no,
+                tap_server_flag=server_flag,
+                status=status,
+            )
         account_id = str(data.get("AccountNo", self.account_no))
         order = {
             "account_id": account_id,
@@ -898,8 +914,17 @@ class NativeTapSession:
 
     def _update_trade(self, data: dict[str, Any]) -> None:
         order_no = str(data.get("OrderNo", ""))
-        native_id = self._native_by_order_no.get(order_no, "")
-        identity = self._identity_by_native.get(native_id)
+        server_flag = str(data.get("ServerFlag", ""))
+        native_id = self._native_by_order_key.get((order_no, server_flag), "")
+        if not native_id and order_no:
+            record = self.order_store.find_by_order_no(order_no, server_flag)
+            if record:
+                identity = self._hydrate_record(record)
+                native_id = str(record.get("tap_client_order_no", "") or "")
+            else:
+                identity = None
+        else:
+            identity = self._identity_by_native.get(native_id)
         symbol = self._canonical_from_data(data, "ContractNo")
         direction = self._direction(data.get("MatchSide"))
         if not symbol or not direction:
@@ -1044,17 +1069,48 @@ class NativeTapSession:
             request["strategy_id"],
             request["client_order_id"],
         )
-        with self._mapping_lock:
-            existing = self._native_by_identity.get(identity_key)
-            if existing:
-                return {
-                    "accepted": True,
-                    "duplicate": True,
-                    "client_order_id": request["client_order_id"],
-                    "tap_client_order_no": existing,
-                }
-
         info = TapSymbol.parse(request["symbol"])
+        existing_record = self.order_store.get(*identity_key)
+        if existing_record:
+            existing_native = str(
+                existing_record.get("tap_client_order_no", "") or ""
+            )
+            if existing_native:
+                self._hydrate_record(existing_record)
+            return {
+                "accepted": True,
+                "duplicate": True,
+                "client_order_id": request["client_order_id"],
+                "tap_client_order_no": existing_native,
+                "recovery_required": not bool(existing_native),
+                "status": str(existing_record.get("status", "")),
+                "message": str(existing_record.get("status_message", "") or ""),
+            }
+
+        reserved = self.order_store.reserve(
+            client_id=request["client_id"],
+            strategy_id=request["strategy_id"],
+            client_order_id=request["client_order_id"],
+            symbol=info.canonical,
+            offset=request["offset"],
+            payload=request,
+        )
+        if not reserved:
+            existing_record = self.order_store.get(*identity_key) or {}
+            return {
+                "accepted": True,
+                "duplicate": True,
+                "client_order_id": request["client_order_id"],
+                "tap_client_order_no": str(
+                    existing_record.get("tap_client_order_no", "") or ""
+                ),
+                "recovery_required": not bool(
+                    existing_record.get("tap_client_order_no")
+                ),
+                "status": str(existing_record.get("status", "")),
+                "message": str(existing_record.get("status_message", "") or ""),
+            }
+
         order_request: dict[str, Any] = {
             "AccountNo": self.account_no,
             "ExchangeNo": info.exchange_no,
@@ -1071,13 +1127,42 @@ class NativeTapSession:
             order_request["ClientLocationID"] = self.settings.client_location
 
         assert self.td_api is not None
-        error_id, native_session, raw_order_id = self.td_api.insertOrder(order_request)
+        try:
+            error_id, native_session, raw_order_id = self.td_api.insertOrder(
+                order_request
+            )
+        except Exception as exc:
+            self.order_store.mark_failed(
+                client_id=request["client_id"],
+                strategy_id=request["strategy_id"],
+                client_order_id=request["client_order_id"],
+                message=str(exc),
+            )
+            raise
         native_id = self._decode_order_id(raw_order_id)
         if error_id != SUCCESS:
+            self.order_store.mark_failed(
+                client_id=request["client_id"],
+                strategy_id=request["strategy_id"],
+                client_order_id=request["client_order_id"],
+                message=f"TAP insertOrder failed: {error_id}",
+            )
             raise RuntimeError(f"TAP insertOrder failed: {error_id}")
         if not native_id:
+            self.order_store.mark_failed(
+                client_id=request["client_id"],
+                strategy_id=request["strategy_id"],
+                client_order_id=request["client_order_id"],
+                message="TAP insertOrder returned an empty ClientOrderNo",
+            )
             raise RuntimeError("TAP insertOrder returned an empty ClientOrderNo")
 
+        self.order_store.set_native(
+            client_id=request["client_id"],
+            strategy_id=request["strategy_id"],
+            client_order_id=request["client_order_id"],
+            tap_client_order_no=native_id,
+        )
         identity = OrderIdentity(
             client_id=request["client_id"],
             strategy_id=request["strategy_id"],
@@ -1094,6 +1179,7 @@ class NativeTapSession:
             "client_order_id": request["client_order_id"],
             "tap_client_order_no": native_id,
             "tap_session": native_session,
+            "message": "",
         }
 
     def cancel_order(self, request: dict[str, Any]) -> dict[str, Any]:
@@ -1105,9 +1191,14 @@ class NativeTapSession:
         )
         native_id = self._native_by_identity.get(identity_key)
         if not native_id:
+            record = self.order_store.get(*identity_key)
+            if record:
+                identity = self._hydrate_record(record)
+                native_id = str(record.get("tap_client_order_no", "") or "")
+        if not native_id:
             raise RuntimeError(
-                "order identity is unknown in this process; persistent recovery "
-                "is added in phase 4"
+                "order identity is reserved but TAP ClientOrderNo is unavailable; "
+                "manual reconciliation is required"
             )
         if native_id not in self._order_no_by_native:
             self._pending_cancels.add(native_id)
@@ -1125,7 +1216,7 @@ class NativeTapSession:
 
     def _send_cancel(self, native_id: str) -> None:
         order_no = self._order_no_by_native[native_id]
-        server_flag = self._server_flag_by_order_no[order_no]
+        server_flag = self._server_flag_by_native[native_id]
         assert self.td_api is not None
         self.td_api.cancelOrder(
             {
@@ -1133,6 +1224,36 @@ class NativeTapSession:
                 "ServerFlag": server_flag,
             }
         )
+
+    def _restore_order_mappings(self) -> None:
+        for record in self.order_store.list():
+            self._hydrate_record(record)
+
+    def _hydrate_record(self, record: dict[str, Any]) -> OrderIdentity:
+        identity = OrderIdentity(
+            client_id=str(record["client_id"]),
+            strategy_id=str(record["strategy_id"]),
+            client_order_id=str(record["client_order_id"]),
+            symbol=str(record["symbol"]),
+            offset=str(record["offset"]),
+        )
+        native_id = str(record.get("tap_client_order_no", "") or "")
+        order_no = str(record.get("tap_order_no", "") or "")
+        server_flag = str(record.get("tap_server_flag", "") or "")
+        identity_key = (
+            identity.client_id,
+            identity.strategy_id,
+            identity.client_order_id,
+        )
+        with self._mapping_lock:
+            if native_id:
+                self._identity_by_native[native_id] = identity
+                self._native_by_identity[identity_key] = native_id
+            if native_id and order_no:
+                self._order_no_by_native[native_id] = order_no
+                self._native_by_order_key[(order_no, server_flag)] = native_id
+                self._server_flag_by_native[native_id] = server_flag
+        return identity
 
     def _require_ready(self) -> None:
         if not self.is_ready():
@@ -1406,3 +1527,4 @@ class NativeTapSession:
         reconnect_thread = self._reconnect_thread
         if reconnect_thread and reconnect_thread.is_alive():
             reconnect_thread.join(timeout=2)
+        self.order_store.close()

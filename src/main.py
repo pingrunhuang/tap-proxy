@@ -10,6 +10,7 @@ from loguru import logger
 
 from config import Settings
 from logger import configure_logger
+from order_store import PostgresOrderStore
 from proxy import TapProxy
 from tap_session import NativeTapSession
 
@@ -27,8 +28,20 @@ def main() -> int:
     configure_logger()
     settings = Settings.from_env()
     settings.validate(require_tap=True)
+    order_store = PostgresOrderStore(
+        settings.database_url,
+        min_size=settings.database_pool_min_size,
+        max_size=settings.database_pool_max_size,
+        connect_timeout_seconds=settings.database_connect_timeout_seconds,
+    )
     proxy = TapProxy(settings)
-    proxy.set_session(NativeTapSession(settings, proxy.enqueue_publish))
+    proxy.set_session(
+        NativeTapSession(
+            settings,
+            proxy.enqueue_publish,
+            order_store=order_store,
+        )
+    )
     shutdown = threading.Event()
 
     def request_shutdown(signum: int, _frame: object) -> None:

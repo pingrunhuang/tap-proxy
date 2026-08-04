@@ -1,4 +1,19 @@
 services:
+  postgres:
+    image: public.ecr.aws/docker/library/postgres:17-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-tap_proxy}
+      POSTGRES_USER: ${POSTGRES_USER:-tap_proxy}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tap_proxy_change_me}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
   tap-proxy:
     build:
       context: .
@@ -10,9 +25,16 @@ services:
     environment:
       LANG: C
       LC_ALL: C
+      DATABASE_URL: postgresql://${POSTGRES_USER:-tap_proxy}:${POSTGRES_PASSWORD:-tap_proxy_change_me}@postgres:5432/${POSTGRES_DB:-tap_proxy}
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "${ZMQ_PUB_PORT:-5575}:${ZMQ_PUB_PORT:-5575}"
       - "${ZMQ_REP_PORT:-5576}:${ZMQ_REP_PORT:-5576}"
     volumes:
       - ./flow:/app/flow
       - ./logs:/app/logs
+
+volumes:
+  postgres-data:

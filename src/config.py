@@ -41,6 +41,12 @@ class Settings:
     reconnect_max_attempts: int = 5
     reconnect_initial_delay_seconds: float = 2.0
     reconnect_max_delay_seconds: float = 60.0
+    database_url: str = (
+        "postgresql://tap_proxy:tap_proxy@127.0.0.1:5432/tap_proxy"
+    )
+    database_pool_min_size: int = 1
+    database_pool_max_size: int = 5
+    database_connect_timeout_seconds: float = 10.0
     zmq_bind_host: str = "0.0.0.0"
     zmq_pub_port: int = 5575
     zmq_rep_port: int = 5576
@@ -80,6 +86,16 @@ class Settings:
                 "TAP_RECONNECT_MAX_DELAY_SECONDS",
                 60.0,
             ),
+            database_url=os.getenv(
+                "DATABASE_URL",
+                "postgresql://tap_proxy:tap_proxy@127.0.0.1:5432/tap_proxy",
+            ),
+            database_pool_min_size=_int_env("DATABASE_POOL_MIN_SIZE", 1),
+            database_pool_max_size=_int_env("DATABASE_POOL_MAX_SIZE", 5),
+            database_connect_timeout_seconds=_float_env(
+                "DATABASE_CONNECT_TIMEOUT_SECONDS",
+                10.0,
+            ),
             zmq_bind_host=os.getenv("ZMQ_BIND_HOST", "0.0.0.0"),
             zmq_pub_port=_int_env("ZMQ_PUB_PORT", 5575),
             zmq_rep_port=_int_env("ZMQ_REP_PORT", 5576),
@@ -116,6 +132,16 @@ class Settings:
             )
         if not self.tap_timezone.strip():
             raise ValueError("TAP_TIMEZONE must not be empty")
+        if not self.database_url.startswith(("postgresql://", "postgres://")):
+            raise ValueError("DATABASE_URL must be a PostgreSQL connection URL")
+        if self.database_pool_min_size < 1:
+            raise ValueError("DATABASE_POOL_MIN_SIZE must be at least 1")
+        if self.database_pool_max_size < self.database_pool_min_size:
+            raise ValueError(
+                "DATABASE_POOL_MAX_SIZE must be >= DATABASE_POOL_MIN_SIZE"
+            )
+        if self.database_connect_timeout_seconds <= 0:
+            raise ValueError("DATABASE_CONNECT_TIMEOUT_SECONDS must be positive")
         if require_tap:
             missing = [
                 name
@@ -137,4 +163,3 @@ class Settings:
                 raise ValueError(
                     f"Missing required TAP configuration: {', '.join(missing)}"
                 )
-
