@@ -107,7 +107,12 @@ Apple Silicon Mac 上预期输出
 `arch=x86_64 vnpy-tap-native=ok`。首次构建需要下载 vn.py 的较大运行时
 依赖，后续构建会复用 Docker 缓存。镜像已经包含 TAP 所需的 OpenSSL 1.1
 兼容库。Compose 会同时启动 PostgreSQL，数据库健康后才启动 TAP Proxy；
-订单映射保存在 `postgres-data` 命名卷中。
+订单映射保存在 `.env` 中 `POSTGRES_DATA_DIR` 指定的宿主机目录，默认是
+项目目录下的 `./data`：
+
+```env
+POSTGRES_DATA_DIR=./data
+```
 
 交易引擎只需要连接 Proxy，不再填写 TAP 柜台账号：
 
