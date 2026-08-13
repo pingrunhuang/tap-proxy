@@ -148,3 +148,13 @@ ZeroMQ 接口尚未实现身份认证，部署时必须只在私有网络开放�
 幂等处理。若进程在柜台接受报单后、Proxy 写回 `ClientOrderNo` 前崩溃，
 该记录会保持 `PENDING_SUBMIT` 并拒绝自动重放，需先与柜台委托查询结果人工
 核对，避免重复下单。
+
+
+# Docker 相关
+
+如果清华源在你的网络下仍然较慢，可以切换到 USTC：
+docker compose build \
+  --build-arg DEBIAN_MIRROR=https://mirrors.ustc.edu.cn
+也可切回 Debian 官方源：
+docker compose build \
+  --build-arg DEBIAN_MIRROR=https://deb.debian.org
