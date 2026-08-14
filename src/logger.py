@@ -24,11 +24,9 @@ def configure_logger() -> None:
     logger.remove()
     logger.add(sys.stderr, level=level)
     logger.add(
-        log_dir / "tap_proxy.{time:YYYY-MM-DD}.log",
+        log_dir / "tap_proxy.{time:YYYY-MM-DD_HH-mm-ss_SSSSSS}.log",
         level=level,
-        rotation="00:00",
         retention=retention,
         enqueue=True,
         encoding="utf-8",
     )
-
