@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import threading
 import time
 from dataclasses import dataclass
@@ -90,6 +92,52 @@ STATUS_TAP_TO_PROTOCOL = {
     _constant("TAPI_ORDER_STATE_LEFTDELETED", "6"): OrderStatus.CANCELLED.value,
     _constant("TAPI_ORDER_STATE_FAIL", "9"): OrderStatus.REJECTED.value,
 }
+
+
+def _trading_day_from_timestamp(value: Any) -> str:
+    text = str(value or "").strip()
+    if len(text) >= 10 and text[4] == "-" and text[7] == "-":
+        return text[:10].replace("-", "")
+    if (
+        len(text) >= 8
+        and text[:8].isdigit()
+        and 1900 <= int(text[:4]) <= 2199
+    ):
+        return text[:8]
+    if len(text) >= 6 and text[:6].isdigit():
+        try:
+            return datetime.strptime(text[:6], "%y%m%d").strftime("%Y%m%d")
+        except ValueError:
+            return ""
+    return ""
+
+
+def _trade_event_id(
+    *,
+    gateway_name: str,
+    account_id: str,
+    trading_day: str,
+    exchange: str,
+    trade_id: str,
+    fallback: dict[str, Any],
+) -> str:
+    """Return a stable identifier for one native fill."""
+    identity: dict[str, Any] = {
+        "gateway_name": gateway_name,
+        "account_id": account_id,
+        "trading_day": trading_day,
+        "exchange": exchange,
+        "trade_id": trade_id,
+    }
+    if not trade_id:
+        identity["fallback"] = fallback
+    encoded = json.dumps(
+        identity,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return f"trade:{gateway_name.lower()}:{hashlib.sha256(encoded).hexdigest()}"
 
 
 class TapUnavailableError(RuntimeError):
@@ -931,20 +979,50 @@ class NativeTapSession:
             return
         account_id = str(data.get("AccountNo", self.account_no))
         trade_time = str(data.get("MatchDateTime", ""))
+        gateway_name = "TAP"
+        trading_day = _trading_day_from_timestamp(trade_time)
+        exchange = str(data.get("ExchangeNo", ""))
+        trade_id = str(data.get("MatchNo", ""))
+        offset = identity.offset if identity else Offset.CLOSE.value
+        price = self._number(data.get("MatchPrice"))
+        volume = self._integer(data.get("MatchQty")) or 0
         trade = {
+            "event_id": _trade_event_id(
+                gateway_name=gateway_name,
+                account_id=account_id,
+                trading_day=trading_day,
+                exchange=exchange,
+                trade_id=trade_id,
+                fallback={
+                    "order_id": order_no,
+                    "client_order_id": (
+                        identity.client_order_id if identity else native_id
+                    ),
+                    "symbol": identity.symbol if identity else symbol,
+                    "direction": direction,
+                    "offset": offset,
+                    "price": price,
+                    "volume": volume,
+                    "trade_time": trade_time,
+                },
+            ),
+            "gateway_name": gateway_name,
             "account_id": account_id,
             "client_id": identity.client_id if identity else "",
             "strategy_id": identity.strategy_id if identity else "",
             "client_order_id": (
                 identity.client_order_id if identity else native_id
             ),
-            "trade_id": str(data.get("MatchNo", "")),
+            "order_id": order_no,
+            "trade_id": trade_id,
             "symbol": identity.symbol if identity else symbol,
+            "exchange": exchange,
             "direction": direction,
-            "offset": identity.offset if identity else Offset.CLOSE.value,
-            "price": self._number(data.get("MatchPrice")),
-            "volume": self._integer(data.get("MatchQty")) or 0,
+            "offset": offset,
+            "price": price,
+            "volume": volume,
             "trade_time": trade_time,
+            "trading_day": trading_day,
             "exchange_timestamp": self._parse_timestamp(trade_time),
         }
         self._publish_scoped("trades", account_id, identity, Event.TRADE, trade)

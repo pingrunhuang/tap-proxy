@@ -9,10 +9,16 @@ from tap_session import (
     SIDE_BUY,
     NativeTapSession,
     TapUnavailableError,
+    _trading_day_from_timestamp,
 )
 
 
 SYMBOL = "COMEX:F:GC:2608"
+
+
+def test_trading_day_supports_tap_timestamp_formats():
+    assert _trading_day_from_timestamp("2026-07-28 10:31:05.456") == "20260728"
+    assert _trading_day_from_timestamp("260728103105.456") == "20260728"
 
 
 class FakeMdApi:
@@ -433,29 +439,46 @@ def test_fill_uses_order_identity_and_publishes_strategy_topic(native_session):
             "OrderState": "4",
         }
     )
-    session.on_fill(
-        {
-            "AccountNo": "TAP-ACCOUNT",
-            "OrderNo": "ORDER-2",
-            "MatchNo": "MATCH-1",
-            "ExchangeNo": "COMEX",
-            "CommodityType": "F",
-            "CommodityNo": "GC",
-            "ContractNo": "2608",
-            "MatchSide": SIDE_BUY,
-            "MatchPrice": 2400.5,
-            "MatchQty": 1,
-            "MatchDateTime": "2026-07-28 10:31:05.456",
-        }
-    )
+    fill = {
+        "AccountNo": "TAP-ACCOUNT",
+        "OrderNo": "ORDER-2",
+        "MatchNo": "MATCH-1",
+        "ExchangeNo": "COMEX",
+        "CommodityType": "F",
+        "CommodityNo": "GC",
+        "ContractNo": "2608",
+        "MatchSide": SIDE_BUY,
+        "MatchPrice": 2400.5,
+        "MatchQty": 1,
+        "MatchDateTime": "2026-07-28 10:31:05.456",
+    }
+    session.on_fill(fill)
 
     strategy_trades = [
         data
         for topic, event, data in published
         if topic == "trades.TAP-ACCOUNT.gc-arb" and event == "trade"
     ]
-    assert strategy_trades[-1]["client_order_id"] == "gc-arb-2"
-    assert strategy_trades[-1]["offset"] == "OPEN"
+    first = strategy_trades[-1]
+    assert first["client_order_id"] == "gc-arb-2"
+    assert first["offset"] == "OPEN"
+    assert first["event_id"].startswith("trade:tap:")
+    assert first["gateway_name"] == "TAP"
+    assert first["account_id"] == "TAP-ACCOUNT"
+    assert first["trading_day"] == "20260728"
+    assert first["exchange"] == "COMEX"
+    assert first["trade_id"] == "MATCH-1"
+    assert first["order_id"] == "ORDER-2"
+
+    session.on_fill(fill)
+    session.on_fill({**fill, "MatchNo": "MATCH-2"})
+    strategy_trades = [
+        data
+        for topic, event, data in published
+        if topic == "trades.TAP-ACCOUNT.gc-arb" and event == "trade"
+    ]
+    assert strategy_trades[-2]["event_id"] == first["event_id"]
+    assert strategy_trades[-1]["event_id"] != first["event_id"]
 
 
 def test_persistent_store_restores_idempotency_and_cancel_mapping(tmp_path):
