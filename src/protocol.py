@@ -20,6 +20,7 @@ class Action(str, Enum):
     GET_ACCOUNT = "get_account"
     GET_POSITIONS = "get_positions"
     GET_ORDERS = "get_orders"
+    GET_TRADES = "get_trades"
     PLACE_ORDER = "place_order"
     CANCEL_ORDER = "cancel_order"
 
@@ -207,6 +208,21 @@ def validate_request(request: Any) -> tuple[Action, dict[str, Any]]:
             "strategy_id",
             "client_order_id",
         )
+
+    elif action is Action.GET_TRADES:
+        normalize_identity(normalized, "client_id", "strategy_id")
+        for field, default in (("after_id", 0), ("limit", 500)):
+            value = normalized.get(field, default)
+            if isinstance(value, bool):
+                raise ProtocolError(f"{field} must be an integer")
+            try:
+                normalized[field] = int(value)
+            except (TypeError, ValueError) as exc:
+                raise ProtocolError(f"{field} must be an integer") from exc
+        if normalized["after_id"] < 0:
+            raise ProtocolError("after_id must not be negative")
+        if normalized["limit"] <= 0 or normalized["limit"] > 1000:
+            raise ProtocolError("limit must be between 1 and 1000")
 
     elif action in {
         Action.GET_ACCOUNT,

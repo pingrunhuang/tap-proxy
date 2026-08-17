@@ -180,6 +180,15 @@ class TapSession(Protocol):
         max_age_seconds: float | None = None,
     ) -> list[dict[str, Any]]: ...
 
+    def query_persisted_trades(
+        self,
+        client_id: str,
+        strategy_id: str,
+        *,
+        after_id: int = 0,
+        limit: int = 500,
+    ) -> dict[str, Any]: ...
+
     def place_order(self, request: dict[str, Any]) -> dict[str, Any]: ...
 
     def cancel_order(self, request: dict[str, Any]) -> dict[str, Any]: ...
@@ -233,6 +242,17 @@ class PendingTapSession:
         max_age_seconds: float | None = None,
     ) -> list[dict[str, Any]]:
         del max_age_seconds
+        self._not_implemented()
+
+    def query_persisted_trades(
+        self,
+        client_id: str,
+        strategy_id: str,
+        *,
+        after_id: int = 0,
+        limit: int = 500,
+    ) -> dict[str, Any]:
+        del client_id, strategy_id, after_id, limit
         self._not_implemented()
 
     def place_order(self, request: dict[str, Any]) -> dict[str, Any]:
@@ -1025,6 +1045,20 @@ class NativeTapSession:
             "trading_day": trading_day,
             "exchange_timestamp": self._parse_timestamp(trade_time),
         }
+        try:
+            inserted = self.order_store.record_trade(trade)
+        except Exception:
+            logger.exception(
+                "Failed to persist TAP trade before publish event_id={}",
+                trade.get("event_id"),
+            )
+            return
+        logger.debug(
+            "Persisted TAP trade event_id={} strategy_id={} inserted={}",
+            trade.get("event_id"),
+            trade.get("strategy_id"),
+            inserted,
+        )
         self._publish_scoped("trades", account_id, identity, Event.TRADE, trade)
 
     def on_order_action(
@@ -1139,6 +1173,21 @@ class NativeTapSession:
             self._wait_query(self._order_query_event, "orders")
             self._raise_query_error("orders")
             return [dict(item) for item in self._order_cache.values()]
+
+    def query_persisted_trades(
+        self,
+        client_id: str,
+        strategy_id: str,
+        *,
+        after_id: int = 0,
+        limit: int = 500,
+    ) -> dict[str, Any]:
+        return self.order_store.list_trades(
+            client_id,
+            strategy_id,
+            after_id=after_id,
+            limit=limit,
+        )
 
     def place_order(self, request: dict[str, Any]) -> dict[str, Any]:
         self._require_ready()

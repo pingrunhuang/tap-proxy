@@ -124,11 +124,15 @@ class TapProxy:
         try:
             action, normalized = validate_request(request)
             if action is Action.PING:
+                session_status = self.session.status()
                 return response_ok(
                     {
                         "service": "tap-proxy",
                         "transport_ready": self.active.is_set(),
                         "ready": self.session.is_ready(),
+                        "database_ready": bool(
+                            session_status.get("order_store_healthy", False)
+                        ),
                         "phase": "native_session",
                         "protocol_version": SCHEMA_VERSION,
                     },
@@ -210,6 +214,16 @@ class TapProxy:
             if action is Action.GET_ORDERS:
                 return response_ok(
                     self.session.query_orders(self._max_age_seconds(normalized)),
+                    request_id,
+                )
+            if action is Action.GET_TRADES:
+                return response_ok(
+                    self.session.query_persisted_trades(
+                        normalized["client_id"],
+                        normalized["strategy_id"],
+                        after_id=normalized["after_id"],
+                        limit=normalized["limit"],
+                    ),
                     request_id,
                 )
             if action is Action.PLACE_ORDER:

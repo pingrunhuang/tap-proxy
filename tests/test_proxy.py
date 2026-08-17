@@ -42,6 +42,23 @@ class FakeNativeSession:
         self.query_calls.append(("orders", max_age_seconds))
         return []
 
+    def query_persisted_trades(
+        self,
+        client_id,
+        strategy_id,
+        *,
+        after_id=0,
+        limit=500,
+    ):
+        self.query_calls.append(
+            ("trades", client_id, strategy_id, after_id, limit)
+        )
+        return {
+            "trades": [{"event_id": "trade:tap:1"}],
+            "next_after_id": 1,
+            "has_more": False,
+        }
+
     def place_order(self, request):
         self.placed.append(request)
         return {"accepted": True, "client_order_id": request["client_order_id"]}
@@ -165,6 +182,15 @@ def test_commands_are_dispatched_to_native_session():
     positions = instance.handle_command(
         {"action": "get_positions", "force_refresh": True}
     )
+    trades = instance.handle_command(
+        {
+            "action": "get_trades",
+            "client_id": "engine",
+            "strategy_id": "a",
+            "after_id": 0,
+            "limit": 25,
+        }
+    )
     order_request = {
         "action": "place_order",
         "client_id": "engine",
@@ -191,6 +217,11 @@ def test_commands_are_dispatched_to_native_session():
     assert session.subscribed == [[symbol], []]
     assert account["data"]["account_id"] == "TAP-ACCOUNT"
     assert positions["status"] == "ok"
-    assert session.query_calls == [("account", 5.0), ("positions", None)]
+    assert session.query_calls == [
+        ("account", 5.0),
+        ("positions", None),
+        ("trades", "engine", "a", 0, 25),
+    ]
+    assert trades["data"]["trades"][0]["event_id"] == "trade:tap:1"
     assert placed["data"]["accepted"] is True
     assert cancelled["data"]["accepted"] is True

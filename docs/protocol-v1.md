@@ -156,10 +156,14 @@ COMEX:F:GC:2608
 {"action":"get_account","request_id":"account-1"}
 {"action":"get_positions","request_id":"positions-1","force_refresh":true}
 {"action":"get_orders","request_id":"orders-1","max_age_ms":5000}
+{"action":"get_trades","request_id":"trades-1","client_id":"engine-01","strategy_id":"gc-arb","after_id":0,"limit":500}
 ```
 
 查询响应中的 `data` 分别为账户对象、持仓数组和订单数组。客户端不能只依赖
 PUB/SUB 恢复状态；重连后必须调用查询命令获取快照。
+
+成交在发布前持久化到 PostgreSQL。`get_trades` 只返回指定 owner 的记录，
+并通过 `next_after_id` 和 `has_more` 分页，供 Engine 恢复断线期间漏收的成交。
 
 查询成功代表本次快照已经完整返回，因此引擎应在处理完响应后产生自己的
 账户或持仓同步完成信号，不需要等待额外 PUB topic。

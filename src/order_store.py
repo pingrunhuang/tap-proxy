@@ -66,6 +66,17 @@ class OrderStore(Protocol):
 
     def list(self) -> list[dict[str, Any]]: ...
 
+    def record_trade(self, payload: dict[str, Any]) -> bool: ...
+
+    def list_trades(
+        self,
+        client_id: str,
+        strategy_id: str,
+        *,
+        after_id: int = 0,
+        limit: int = 500,
+    ) -> dict[str, Any]: ...
+
     def is_healthy(self) -> bool: ...
 
     def close(self) -> None: ...
@@ -78,6 +89,8 @@ class MemoryOrderStore:
 
     def __init__(self) -> None:
         self._records: dict[tuple[str, str, str], dict[str, Any]] = {}
+        self._trades: list[dict[str, Any]] = []
+        self._trade_event_ids: set[str] = set()
         self._lock = threading.RLock()
 
     @staticmethod
@@ -216,6 +229,44 @@ class MemoryOrderStore:
         with self._lock:
             return [dict(record) for record in self._records.values()]
 
+    def record_trade(self, payload: dict[str, Any]) -> bool:
+        event_id = str(payload.get("event_id") or "").strip()
+        if not event_id:
+            raise ValueError("trade payload requires event_id")
+        with self._lock:
+            if event_id in self._trade_event_ids:
+                return False
+            self._trade_event_ids.add(event_id)
+            self._trades.append(
+                {"id": len(self._trades) + 1, "payload": dict(payload)}
+            )
+            return True
+
+    def list_trades(
+        self,
+        client_id: str,
+        strategy_id: str,
+        *,
+        after_id: int = 0,
+        limit: int = 500,
+    ) -> dict[str, Any]:
+        page_size = min(max(int(limit), 1), 1000)
+        cursor = max(int(after_id), 0)
+        with self._lock:
+            matching = [
+                row
+                for row in self._trades
+                if row["id"] > cursor
+                and str(row["payload"].get("client_id") or "") == client_id
+                and str(row["payload"].get("strategy_id") or "") == strategy_id
+            ]
+            page = matching[:page_size]
+            return {
+                "trades": [dict(row["payload"]) for row in page],
+                "next_after_id": int(page[-1]["id"]) if page else cursor,
+                "has_more": len(matching) > page_size,
+            }
+
     def is_healthy(self) -> bool:
         return True
 
@@ -269,6 +320,25 @@ class PostgresOrderStore:
                     UNIQUE (client_id, strategy_id, client_order_id)
                 )
                 """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS tap_trades (
+                    id BIGSERIAL PRIMARY KEY,
+                    event_id TEXT NOT NULL UNIQUE,
+                    client_id TEXT NOT NULL DEFAULT '',
+                    strategy_id TEXT NOT NULL DEFAULT '',
+                    account_id TEXT NOT NULL DEFAULT '',
+                    trading_day TEXT NOT NULL DEFAULT '',
+                    trade_id TEXT NOT NULL DEFAULT '',
+                    payload JSONB NOT NULL,
+                    received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tap_trades_owner_cursor "
+                "ON tap_trades(client_id, strategy_id, id)"
             )
             connection.execute(
                 """
@@ -437,6 +507,61 @@ class PostgresOrderStore:
             return connection.execute(
                 "SELECT * FROM tap_orders ORDER BY updated_at ASC"
             ).fetchall()
+
+    def record_trade(self, payload: dict[str, Any]) -> bool:
+        event_id = str(payload.get("event_id") or "").strip()
+        if not event_id:
+            raise ValueError("trade payload requires event_id")
+        with self._pool.connection() as connection:
+            row = connection.execute(
+                """
+                INSERT INTO tap_trades(
+                    event_id, client_id, strategy_id, account_id,
+                    trading_day, trade_id, payload
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
+                ON CONFLICT (event_id) DO NOTHING
+                RETURNING id
+                """,
+                (
+                    event_id,
+                    str(payload.get("client_id") or ""),
+                    str(payload.get("strategy_id") or ""),
+                    str(payload.get("account_id") or ""),
+                    str(payload.get("trading_day") or ""),
+                    str(payload.get("trade_id") or ""),
+                    json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str),
+                ),
+            ).fetchone()
+            return row is not None
+
+    def list_trades(
+        self,
+        client_id: str,
+        strategy_id: str,
+        *,
+        after_id: int = 0,
+        limit: int = 500,
+    ) -> dict[str, Any]:
+        page_size = min(max(int(limit), 1), 1000)
+        cursor = max(int(after_id), 0)
+        with self._pool.connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, payload
+                FROM tap_trades
+                WHERE client_id=%s AND strategy_id=%s AND id>%s
+                ORDER BY id ASC
+                LIMIT %s
+                """,
+                (client_id, strategy_id, cursor, page_size + 1),
+            ).fetchall()
+        has_more = len(rows) > page_size
+        page = rows[:page_size]
+        return {
+            "trades": [row["payload"] for row in page],
+            "next_after_id": int(page[-1]["id"]) if page else cursor,
+            "has_more": has_more,
+        }
 
     def is_healthy(self) -> bool:
         try:

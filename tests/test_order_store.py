@@ -59,3 +59,26 @@ def test_memory_order_store_reserves_and_updates_mapping():
     )
     assert store.find_by_order_no("ORDER-1", "S")["strategy_id"] == "nickel"
     assert store.find_by_order_no("ORDER-1", "OTHER")["strategy_id"] == "copper"
+
+
+def test_memory_order_store_persists_trades_by_owner_with_cursor():
+    store = MemoryOrderStore()
+    first = {
+        "event_id": "trade:tap:1",
+        "client_id": "engine",
+        "strategy_id": "gc-arb",
+    }
+    second = {
+        "event_id": "trade:tap:2",
+        "client_id": "engine",
+        "strategy_id": "other",
+    }
+
+    assert store.record_trade(first)
+    assert not store.record_trade(first)
+    assert store.record_trade(second)
+
+    page = store.list_trades("engine", "gc-arb", after_id=0, limit=1)
+    assert page["trades"] == [first]
+    assert page["next_after_id"] == 1
+    assert page["has_more"] is False

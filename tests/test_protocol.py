@@ -127,6 +127,24 @@ def test_force_refresh_must_be_boolean():
         validate_request({"action": "get_positions", "force_refresh": "false"})
 
 
+def test_get_trades_requires_owner_and_normalizes_pagination():
+    action, request = validate_request(
+        {
+            "action": "get_trades",
+            "client_id": "engine",
+            "strategy_id": "gc-arb",
+            "after_id": "10",
+            "limit": "25",
+        }
+    )
+    assert action is Action.GET_TRADES
+    assert request["after_id"] == 10
+    assert request["limit"] == 25
+
+    with pytest.raises(ProtocolError, match="strategy_id"):
+        validate_request({"action": "get_trades", "client_id": "engine"})
+
+
 def test_event_and_error_envelopes_follow_schema_v1():
     event = event_payload(
         Event.STATUS,
