@@ -189,6 +189,14 @@ class TapSession(Protocol):
         limit: int = 500,
     ) -> dict[str, Any]: ...
 
+    def latest_trade_cursor(self, client_id: str, strategy_id: str) -> int: ...
+
+    def query_persisted_orders(
+        self,
+        client_id: str,
+        strategy_id: str,
+    ) -> list[dict[str, Any]]: ...
+
     def place_order(self, request: dict[str, Any]) -> dict[str, Any]: ...
 
     def cancel_order(self, request: dict[str, Any]) -> dict[str, Any]: ...
@@ -253,6 +261,18 @@ class PendingTapSession:
         limit: int = 500,
     ) -> dict[str, Any]:
         del client_id, strategy_id, after_id, limit
+        self._not_implemented()
+
+    def latest_trade_cursor(self, client_id: str, strategy_id: str) -> int:
+        del client_id, strategy_id
+        self._not_implemented()
+
+    def query_persisted_orders(
+        self,
+        client_id: str,
+        strategy_id: str,
+    ) -> list[dict[str, Any]]:
+        del client_id, strategy_id
         self._not_implemented()
 
     def place_order(self, request: dict[str, Any]) -> dict[str, Any]:
@@ -1046,7 +1066,7 @@ class NativeTapSession:
             "exchange_timestamp": self._parse_timestamp(trade_time),
         }
         try:
-            inserted = self.order_store.record_trade(trade)
+            trade_cursor = self.order_store.record_trade(trade)
         except Exception:
             logger.exception(
                 "Failed to persist TAP trade before publish event_id={}",
@@ -1054,12 +1074,22 @@ class NativeTapSession:
             )
             return
         logger.debug(
-            "Persisted TAP trade event_id={} strategy_id={} inserted={}",
+            "Persisted TAP trade event_id={} strategy_id={} trade_cursor={}",
             trade.get("event_id"),
             trade.get("strategy_id"),
-            inserted,
+            trade_cursor,
         )
-        self._publish_scoped("trades", account_id, identity, Event.TRADE, trade)
+        if not trade_cursor:
+            logger.debug("Skip duplicate TAP trade event_id={}", trade.get("event_id"))
+            return
+        published_trade = {**trade, "trade_cursor": int(trade_cursor)}
+        self._publish_scoped(
+            "trades",
+            account_id,
+            identity,
+            Event.TRADE,
+            published_trade,
+        )
 
     def on_order_action(
         self,
@@ -1188,6 +1218,21 @@ class NativeTapSession:
             after_id=after_id,
             limit=limit,
         )
+
+    def latest_trade_cursor(self, client_id: str, strategy_id: str) -> int:
+        return self.order_store.latest_trade_cursor(client_id, strategy_id)
+
+    def query_persisted_orders(
+        self,
+        client_id: str,
+        strategy_id: str,
+    ) -> list[dict[str, Any]]:
+        return [
+            row
+            for row in self.order_store.list()
+            if str(row.get("client_id") or "") == client_id
+            and str(row.get("strategy_id") or "") == strategy_id
+        ]
 
     def place_order(self, request: dict[str, Any]) -> dict[str, Any]:
         self._require_ready()

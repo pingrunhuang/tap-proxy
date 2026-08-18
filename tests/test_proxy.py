@@ -59,6 +59,14 @@ class FakeNativeSession:
             "has_more": False,
         }
 
+    def latest_trade_cursor(self, client_id, strategy_id):
+        self.query_calls.append(("trade_cursor", client_id, strategy_id))
+        return 7
+
+    def query_persisted_orders(self, client_id, strategy_id):
+        self.query_calls.append(("persisted_orders", client_id, strategy_id))
+        return []
+
     def place_order(self, request):
         self.placed.append(request)
         return {"accepted": True, "client_order_id": request["client_order_id"]}
@@ -191,6 +199,13 @@ def test_commands_are_dispatched_to_native_session():
             "limit": 25,
         }
     )
+    cursor = instance.handle_command(
+        {
+            "action": "get_trade_cursor",
+            "client_id": "engine",
+            "strategy_id": "a",
+        }
+    )
     order_request = {
         "action": "place_order",
         "client_id": "engine",
@@ -221,7 +236,9 @@ def test_commands_are_dispatched_to_native_session():
         ("account", 5.0),
         ("positions", None),
         ("trades", "engine", "a", 0, 25),
+        ("trade_cursor", "engine", "a"),
     ]
     assert trades["data"]["trades"][0]["event_id"] == "trade:tap:1"
+    assert cursor["data"] == {"cursor": 7}
     assert placed["data"]["accepted"] is True
     assert cancelled["data"]["accepted"] is True

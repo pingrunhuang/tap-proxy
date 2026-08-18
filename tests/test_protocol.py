@@ -144,6 +144,16 @@ def test_get_trades_requires_owner_and_normalizes_pagination():
     with pytest.raises(ProtocolError, match="strategy_id"):
         validate_request({"action": "get_trades", "client_id": "engine"})
 
+    cursor_action, cursor_request = validate_request(
+        {
+            "action": "get_trade_cursor",
+            "client_id": "engine",
+            "strategy_id": "gc-arb",
+        }
+    )
+    assert cursor_action is Action.GET_TRADE_CURSOR
+    assert cursor_request["strategy_id"] == "gc-arb"
+
 
 def test_event_and_error_envelopes_follow_schema_v1():
     event = event_payload(

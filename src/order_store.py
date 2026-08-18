@@ -66,7 +66,9 @@ class OrderStore(Protocol):
 
     def list(self) -> list[dict[str, Any]]: ...
 
-    def record_trade(self, payload: dict[str, Any]) -> bool: ...
+    def record_trade(self, payload: dict[str, Any]) -> int | None: ...
+
+    def latest_trade_cursor(self, client_id: str, strategy_id: str) -> int: ...
 
     def list_trades(
         self,
@@ -229,18 +231,19 @@ class MemoryOrderStore:
         with self._lock:
             return [dict(record) for record in self._records.values()]
 
-    def record_trade(self, payload: dict[str, Any]) -> bool:
+    def record_trade(self, payload: dict[str, Any]) -> int | None:
         event_id = str(payload.get("event_id") or "").strip()
         if not event_id:
             raise ValueError("trade payload requires event_id")
         with self._lock:
             if event_id in self._trade_event_ids:
-                return False
+                return None
             self._trade_event_ids.add(event_id)
+            cursor = len(self._trades) + 1
             self._trades.append(
-                {"id": len(self._trades) + 1, "payload": dict(payload)}
+                {"id": cursor, "payload": dict(payload)}
             )
-            return True
+            return cursor
 
     def list_trades(
         self,
@@ -262,10 +265,25 @@ class MemoryOrderStore:
             ]
             page = matching[:page_size]
             return {
-                "trades": [dict(row["payload"]) for row in page],
+                "trades": [
+                    {**dict(row["payload"]), "trade_cursor": int(row["id"])}
+                    for row in page
+                ],
                 "next_after_id": int(page[-1]["id"]) if page else cursor,
                 "has_more": len(matching) > page_size,
             }
+
+    def latest_trade_cursor(self, client_id: str, strategy_id: str) -> int:
+        with self._lock:
+            return max(
+                (
+                    int(row["id"])
+                    for row in self._trades
+                    if str(row["payload"].get("client_id") or "") == client_id
+                    and str(row["payload"].get("strategy_id") or "") == strategy_id
+                ),
+                default=0,
+            )
 
     def is_healthy(self) -> bool:
         return True
@@ -508,7 +526,7 @@ class PostgresOrderStore:
                 "SELECT * FROM tap_orders ORDER BY updated_at ASC"
             ).fetchall()
 
-    def record_trade(self, payload: dict[str, Any]) -> bool:
+    def record_trade(self, payload: dict[str, Any]) -> int | None:
         event_id = str(payload.get("event_id") or "").strip()
         if not event_id:
             raise ValueError("trade payload requires event_id")
@@ -532,7 +550,7 @@ class PostgresOrderStore:
                     json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str),
                 ),
             ).fetchone()
-            return row is not None
+            return int(row["id"]) if row is not None else None
 
     def list_trades(
         self,
@@ -557,11 +575,28 @@ class PostgresOrderStore:
             ).fetchall()
         has_more = len(rows) > page_size
         page = rows[:page_size]
+        trades = []
+        for row in page:
+            payload = dict(row["payload"])
+            payload["trade_cursor"] = int(row["id"])
+            trades.append(payload)
         return {
-            "trades": [row["payload"] for row in page],
+            "trades": trades,
             "next_after_id": int(page[-1]["id"]) if page else cursor,
             "has_more": has_more,
         }
+
+    def latest_trade_cursor(self, client_id: str, strategy_id: str) -> int:
+        with self._pool.connection() as connection:
+            row = connection.execute(
+                """
+                SELECT COALESCE(MAX(id), 0) AS cursor
+                FROM tap_trades
+                WHERE client_id=%s AND strategy_id=%s
+                """,
+                (client_id, strategy_id),
+            ).fetchone()
+        return int(row["cursor"])
 
     def is_healthy(self) -> bool:
         try:

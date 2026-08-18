@@ -79,6 +79,7 @@ def test_memory_order_store_persists_trades_by_owner_with_cursor():
     assert store.record_trade(second)
 
     page = store.list_trades("engine", "gc-arb", after_id=0, limit=1)
-    assert page["trades"] == [first]
+    assert page["trades"] == [{**first, "trade_cursor": 1}]
     assert page["next_after_id"] == 1
     assert page["has_more"] is False
+    assert store.latest_trade_cursor("engine", "gc-arb") == 1

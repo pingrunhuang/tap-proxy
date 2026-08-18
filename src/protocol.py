@@ -21,6 +21,7 @@ class Action(str, Enum):
     GET_POSITIONS = "get_positions"
     GET_ORDERS = "get_orders"
     GET_TRADES = "get_trades"
+    GET_TRADE_CURSOR = "get_trade_cursor"
     PLACE_ORDER = "place_order"
     CANCEL_ORDER = "cancel_order"
 
@@ -209,8 +210,10 @@ def validate_request(request: Any) -> tuple[Action, dict[str, Any]]:
             "client_order_id",
         )
 
-    elif action is Action.GET_TRADES:
+    elif action in {Action.GET_TRADES, Action.GET_TRADE_CURSOR}:
         normalize_identity(normalized, "client_id", "strategy_id")
+        if action is Action.GET_TRADE_CURSOR:
+            return action, normalized
         for field, default in (("after_id", 0), ("limit", 500)):
             value = normalized.get(field, default)
             if isinstance(value, bool):
@@ -229,6 +232,8 @@ def validate_request(request: Any) -> tuple[Action, dict[str, Any]]:
         Action.GET_POSITIONS,
         Action.GET_ORDERS,
     }:
+        if action is Action.GET_ORDERS and normalized.get("local_only"):
+            normalize_identity(normalized, "client_id", "strategy_id")
         if "force_refresh" in normalized and not isinstance(
             normalized["force_refresh"],
             bool,

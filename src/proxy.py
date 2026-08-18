@@ -212,6 +212,14 @@ class TapProxy:
                     request_id,
                 )
             if action is Action.GET_ORDERS:
+                if normalized.get("local_only"):
+                    return response_ok(
+                        self.session.query_persisted_orders(
+                            normalized["client_id"],
+                            normalized["strategy_id"],
+                        ),
+                        request_id,
+                    )
                 return response_ok(
                     self.session.query_orders(self._max_age_seconds(normalized)),
                     request_id,
@@ -224,6 +232,16 @@ class TapProxy:
                         after_id=normalized["after_id"],
                         limit=normalized["limit"],
                     ),
+                    request_id,
+                )
+            if action is Action.GET_TRADE_CURSOR:
+                return response_ok(
+                    {
+                        "cursor": self.session.latest_trade_cursor(
+                            normalized["client_id"],
+                            normalized["strategy_id"],
+                        )
+                    },
                     request_id,
                 )
             if action is Action.PLACE_ORDER:
