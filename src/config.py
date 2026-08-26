@@ -4,6 +4,13 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+TRUE_VALUES = frozenset({"1", "true", "yes", "on", "y"})
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    return default if value is None else value.strip().lower() in TRUE_VALUES
+
 
 def _int_env(name: str, default: int) -> int:
     value = os.getenv(name)
@@ -33,6 +40,7 @@ class Settings:
     td_auth_code: str = ""
     client_id: str = ""
     client_location: str = "CN"
+    enable_md: bool = True
     initial_symbols: list[str] | None = None
     tap_data_path: Path = Path("flow/tap")
     tap_timezone: str = "Asia/Shanghai"
@@ -72,6 +80,7 @@ class Settings:
             td_auth_code=os.getenv("TAP_TD_AUTH_CODE", shared_auth_code),
             client_id=os.getenv("TAP_CLIENT_ID", ""),
             client_location=os.getenv("TAP_CLIENT_LOCATION", "CN"),
+            enable_md=_bool_env("TAP_ENABLE_MD", True),
             initial_symbols=_symbols_env("TAP_SYMBOLS"),
             tap_data_path=Path(os.getenv("TAP_DATA_PATH", "flow/tap")),
             tap_timezone=os.getenv("TAP_TIMEZONE", "Asia/Shanghai"),
@@ -142,21 +151,27 @@ class Settings:
             )
         if self.database_connect_timeout_seconds <= 0:
             raise ValueError("DATABASE_CONNECT_TIMEOUT_SECONDS must be positive")
+        if not self.enable_md and self.initial_symbols:
+            raise ValueError("TAP_SYMBOLS must be empty when TAP_ENABLE_MD=false")
         if require_tap:
-            missing = [
-                name
-                for name, value in {
+            required = {
+                "TAP_TD_HOST": self.td_host,
+                "TAP_TD_PORT": self.td_port,
+                "TAP_TD_USER_ID": self.td_user_id,
+                "TAP_TD_PASSWORD": self.td_password,
+                "TAP_TD_AUTH_CODE": self.td_auth_code,
+            }
+            if self.enable_md:
+                required.update({
                     "TAP_MD_HOST": self.md_host,
                     "TAP_MD_PORT": self.md_port,
                     "TAP_MD_USER_ID": self.md_user_id,
                     "TAP_MD_PASSWORD": self.md_password,
                     "TAP_MD_AUTH_CODE": self.md_auth_code,
-                    "TAP_TD_HOST": self.td_host,
-                    "TAP_TD_PORT": self.td_port,
-                    "TAP_TD_USER_ID": self.td_user_id,
-                    "TAP_TD_PASSWORD": self.td_password,
-                    "TAP_TD_AUTH_CODE": self.td_auth_code,
-                }.items()
+                })
+            missing = [
+                name
+                for name, value in required.items()
                 if value in ("", 0)
             ]
             if missing:

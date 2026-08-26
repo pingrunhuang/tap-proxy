@@ -549,17 +549,20 @@ class NativeTapSession:
             self._close_native()
             self._reset_connection_state()
             self.settings.tap_data_path.mkdir(parents=True, exist_ok=True)
-            self.md_api = self._md_factory(self)
             self.td_api = self._td_factory(self)
-            self._initialize_md()
+            if self.settings.enable_md:
+                self.md_api = self._md_factory(self)
+                self._initialize_md()
             self._initialize_td()
 
-        for event in (
-            self.md_ready_event,
+        readiness_events = [
             self.td_ready_event,
             self.account_ready_event,
             self.initial_sync_event,
-        ):
+        ]
+        if self.settings.enable_md:
+            readiness_events.insert(0, self.md_ready_event)
+        for event in readiness_events:
             remaining = deadline - time.monotonic()
             if remaining <= 0 or not event.wait(remaining):
                 self.last_error = "TAP login readiness timeout"
@@ -634,7 +637,7 @@ class NativeTapSession:
     def is_ready(self) -> bool:
         return (
             self.native_available
-            and self.md_ready_event.is_set()
+            and (not self.settings.enable_md or self.md_ready_event.is_set())
             and self.td_ready_event.is_set()
             and self.account_ready_event.is_set()
             and self.initial_sync_event.is_set()
@@ -644,6 +647,7 @@ class NativeTapSession:
     def status(self) -> dict[str, Any]:
         return {
             "native_available": self.native_available,
+            "md_enabled": self.settings.enable_md,
             "md_ready": self.md_ready_event.is_set(),
             "td_ready": self.td_ready_event.is_set(),
             "account_ready": self.account_ready_event.is_set(),
@@ -1107,6 +1111,8 @@ class NativeTapSession:
             )
 
     def subscribe_market_data(self, symbols: list[str]) -> None:
+        if not self.settings.enable_md:
+            raise RuntimeError("TAP market data is disabled by TAP_ENABLE_MD=false")
         normalized = [TapSymbol.parse(symbol).canonical for symbol in symbols]
         for symbol in normalized:
             self.active_symbols.add(symbol)
@@ -1122,6 +1128,8 @@ class NativeTapSession:
             self.md_api.subscribeQuote(self._quote_request(info))
 
     def unsubscribe_market_data(self, symbols: list[str]) -> None:
+        if not self.settings.enable_md:
+            raise RuntimeError("TAP market data is disabled by TAP_ENABLE_MD=false")
         normalized = [TapSymbol.parse(symbol).canonical for symbol in symbols]
         for symbol in normalized:
             self.active_symbols.discard(symbol)
@@ -1513,6 +1521,7 @@ class NativeTapSession:
             Event.STATUS.value,
             {
                 "ready": self.is_ready(),
+                "md_enabled": self.settings.enable_md,
                 "md_ready": self.md_ready_event.is_set(),
                 "td_ready": self.td_ready_event.is_set(),
                 "account_ready": self.account_ready_event.is_set(),

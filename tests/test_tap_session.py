@@ -209,6 +209,28 @@ def test_connect_runs_native_login_and_initial_snapshot_chain(native_session):
     assert any(topic == "positions.TAP-ACCOUNT" for topic, _, _ in published)
 
 
+def test_td_only_connect_skips_md_api(tmp_path):
+    config = make_settings(tmp_path)
+    config.enable_md = False
+    config.initial_symbols = []
+    session = NativeTapSession(
+        config,
+        lambda *_args: None,
+        md_factory=lambda _session: pytest.fail("MD API must not be created"),
+        td_factory=FakeTdApi,
+        native_available=True,
+    )
+    try:
+        assert session.connect(0.5)
+        assert session.md_api is None
+        assert session.is_ready()
+        assert session.status()["md_enabled"] is False
+        with pytest.raises(RuntimeError, match="TAP_ENABLE_MD=false"):
+            session.subscribe_market_data([SYMBOL])
+    finally:
+        session.close()
+
+
 def test_td_ready_notification_code_is_not_treated_as_error(tmp_path):
     class NonzeroReadyTdApi(FakeTdApi):
         def login(self, request):

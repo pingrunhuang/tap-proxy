@@ -3,6 +3,9 @@
 独立的 TAP 接入服务。目标是由一个进程持有 TAP MD/TD 会话，通过 ZeroMQ
 向多个交易引擎和策略提供行情与交易能力。
 
+设置 `TAP_ENABLE_MD=false` 可仅登录 TD；此时不校验或登录 MD，且
+`TAP_SYMBOLS` 必须为空，运行时行情订阅请求会被拒绝。
+
 当前已完成拆分计划的第 1～5 步：
 
 - TAP Proxy v1 协议已经冻结，详见
@@ -163,3 +166,7 @@ docker compose build \
 也可切回 Debian 官方源：
 docker compose build \
   --build-arg DEBIAN_MIRROR=https://deb.debian.org
+
+
+# 部署注意事项
+1. 在.env文件里面要记得指定pg相关的信息

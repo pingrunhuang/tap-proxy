@@ -135,6 +135,7 @@ class TapProxy:
                         ),
                         "phase": "native_session",
                         "protocol_version": SCHEMA_VERSION,
+                        "md_enabled": self.settings.enable_md,
                     },
                     request_id,
                 )
@@ -154,6 +155,8 @@ class TapProxy:
                     request_id,
                 )
             if action is Action.SUBSCRIBE_MARKET_DATA:
+                if not self.settings.enable_md:
+                    raise RuntimeError("TAP market data is disabled by TAP_ENABLE_MD=false")
                 symbols = normalized["symbols"]
                 newly_active = self.subscriptions.subscribe(
                     normalized["client_id"],
@@ -178,6 +181,8 @@ class TapProxy:
                     request_id,
                 )
             if action is Action.UNSUBSCRIBE_MARKET_DATA:
+                if not self.settings.enable_md:
+                    raise RuntimeError("TAP market data is disabled by TAP_ENABLE_MD=false")
                 symbols = normalized["symbols"]
                 newly_inactive = self.subscriptions.unsubscribe(
                     normalized["client_id"],
