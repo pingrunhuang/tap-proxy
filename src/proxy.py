@@ -136,6 +136,7 @@ class TapProxy:
                         "phase": "native_session",
                         "protocol_version": SCHEMA_VERSION,
                         "md_enabled": self.settings.enable_md,
+                        "td_enabled": True,
                     },
                     request_id,
                 )
@@ -147,6 +148,8 @@ class TapProxy:
                         "ready": self.session.is_ready(),
                         "phase": "native_session",
                         "protocol_version": SCHEMA_VERSION,
+                        "md_enabled": self.settings.enable_md,
+                        "td_enabled": True,
                         "session": self.session.status(),
                         "published_queue_size": self._publish_queue.qsize(),
                         "pub_port": self.bound_pub_port,

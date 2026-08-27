@@ -102,9 +102,13 @@ def test_ping_and_status_report_transport_but_not_tap_ready(proxy):
     assert ping["request_id"] == "health-1"
     assert ping["data"]["transport_ready"] is True
     assert ping["data"]["ready"] is False
+    assert ping["data"]["md_enabled"] is True
+    assert ping["data"]["td_enabled"] is True
     assert status["data"]["pub_port"] == proxy.bound_pub_port
     assert status["data"]["rep_port"] == proxy.bound_rep_port
     assert status["data"]["session"]["implementation"] == "pending_or_test_double"
+    assert status["data"]["md_enabled"] is True
+    assert status["data"]["td_enabled"] is True
 
 
 def test_frozen_but_unimplemented_command_is_explicit(proxy):
