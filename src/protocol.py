@@ -31,13 +31,6 @@ class Direction(str, Enum):
     SELL = "SELL"
 
 
-class Offset(str, Enum):
-    OPEN = "OPEN"
-    CLOSE = "CLOSE"
-    CLOSETODAY = "CLOSETODAY"
-    CLOSEYESTERDAY = "CLOSEYESTERDAY"
-
-
 class OrderStatus(str, Enum):
     SUBMITTED = "SUBMITTED"
     PARTTRADED = "PARTTRADED"
@@ -173,10 +166,10 @@ def validate_request(request: Any) -> tuple[Action, dict[str, Any]]:
             normalized,
             "symbol",
             "direction",
-            "offset",
             "price",
             "volume",
         )
+        normalized.pop("offset", None)
         normalized["symbol"] = canonical_symbol(normalized["symbol"])
         try:
             if isinstance(normalized["price"], bool):
@@ -184,7 +177,6 @@ def validate_request(request: Any) -> tuple[Action, dict[str, Any]]:
             normalized["direction"] = Direction(
                 str(normalized["direction"]).upper()
             ).value
-            normalized["offset"] = Offset(str(normalized["offset"]).upper()).value
             normalized["price"] = float(normalized["price"])
             if isinstance(normalized["volume"], bool):
                 raise ValueError("volume must be an integer")

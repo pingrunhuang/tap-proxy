@@ -17,7 +17,6 @@ from order_store import MemoryOrderStore, OrderStore
 from protocol import (
     Direction,
     Event,
-    Offset,
     OrderStatus,
     TapSymbol,
     market_data_topic,
@@ -154,7 +153,6 @@ class OrderIdentity:
     strategy_id: str
     client_order_id: str
     symbol: str
-    offset: str
 
 
 class TapSession(Protocol):
@@ -966,7 +964,6 @@ class NativeTapSession:
             ),
             "symbol": identity.symbol if identity else symbol,
             "direction": direction,
-            "offset": identity.offset if identity else Offset.CLOSE.value,
             "price": self._number(data.get("OrderPrice")),
             "volume": self._integer(data.get("OrderQty")) or 0,
             "traded": self._integer(data.get("OrderMatchQty")) or 0,
@@ -1027,7 +1024,6 @@ class NativeTapSession:
         trading_day = _trading_day_from_timestamp(trade_time)
         exchange = str(data.get("ExchangeNo", ""))
         trade_id = str(data.get("MatchNo", ""))
-        offset = identity.offset if identity else Offset.CLOSE.value
         price = self._number(data.get("MatchPrice"))
         volume = self._integer(data.get("MatchQty")) or 0
         trade = {
@@ -1044,7 +1040,6 @@ class NativeTapSession:
                     ),
                     "symbol": identity.symbol if identity else symbol,
                     "direction": direction,
-                    "offset": offset,
                     "price": price,
                     "volume": volume,
                     "trade_time": trade_time,
@@ -1062,7 +1057,6 @@ class NativeTapSession:
             "symbol": identity.symbol if identity else symbol,
             "exchange": exchange,
             "direction": direction,
-            "offset": offset,
             "price": price,
             "volume": volume,
             "trade_time": trade_time,
@@ -1272,7 +1266,6 @@ class NativeTapSession:
             strategy_id=request["strategy_id"],
             client_order_id=request["client_order_id"],
             symbol=info.canonical,
-            offset=request["offset"],
             payload=request,
         )
         if not reserved:
@@ -1348,7 +1341,6 @@ class NativeTapSession:
             strategy_id=request["strategy_id"],
             client_order_id=request["client_order_id"],
             symbol=info.canonical,
-            offset=request["offset"],
         )
         with self._mapping_lock:
             self._identity_by_native[native_id] = identity
@@ -1415,7 +1407,6 @@ class NativeTapSession:
             strategy_id=str(record["strategy_id"]),
             client_order_id=str(record["client_order_id"]),
             symbol=str(record["symbol"]),
-            offset=str(record["offset"]),
         )
         native_id = str(record.get("tap_client_order_no", "") or "")
         order_no = str(record.get("tap_order_no", "") or "")

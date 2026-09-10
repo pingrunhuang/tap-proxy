@@ -347,7 +347,6 @@ def test_place_order_is_idempotent_and_cancel_waits_for_order_mapping(
         "client_order_id": "gc-arb-1",
         "symbol": SYMBOL,
         "direction": "BUY",
-        "offset": "OPEN",
         "price": 2400.5,
         "volume": 1,
     }
@@ -404,7 +403,6 @@ def test_failed_order_duplicate_returns_failure_message(tmp_path):
         "client_order_id": "gc-arb-failed-1",
         "symbol": SYMBOL,
         "direction": "BUY",
-        "offset": "OPEN",
         "price": 2400.5,
         "volume": 1,
     }
@@ -438,7 +436,6 @@ def test_fill_uses_order_identity_and_publishes_strategy_topic(native_session):
         "client_order_id": "gc-arb-2",
         "symbol": SYMBOL,
         "direction": "BUY",
-        "offset": "OPEN",
         "price": 2400.5,
         "volume": 1,
     }
@@ -483,7 +480,7 @@ def test_fill_uses_order_identity_and_publishes_strategy_topic(native_session):
     ]
     first = strategy_trades[-1]
     assert first["client_order_id"] == "gc-arb-2"
-    assert first["offset"] == "OPEN"
+    assert "offset" not in first
     assert first["event_id"].startswith("trade:tap:")
     assert first["gateway_name"] == "TAP"
     assert first["account_id"] == "TAP-ACCOUNT"
@@ -512,7 +509,6 @@ def test_persistent_store_restores_idempotency_and_cancel_mapping(tmp_path):
         "client_order_id": "gc-arb-restart-1",
         "symbol": SYMBOL,
         "direction": "BUY",
-        "offset": "OPEN",
         "price": 2400.5,
         "volume": 1,
     }

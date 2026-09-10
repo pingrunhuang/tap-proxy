@@ -47,7 +47,6 @@ def test_place_order_is_normalized_and_validated():
             "client_order_id": "gc-arb-1",
             "symbol": "comex:f:gc:2608",
             "direction": "buy",
-            "offset": "open",
             "price": "2400.5",
             "volume": "1",
         }
@@ -55,7 +54,7 @@ def test_place_order_is_normalized_and_validated():
     assert action is Action.PLACE_ORDER
     assert request["symbol"] == "COMEX:F:GC:2608"
     assert request["direction"] == "BUY"
-    assert request["offset"] == "OPEN"
+    assert "offset" not in request
     assert request["price"] == 2400.5
     assert request["volume"] == 1
 
@@ -70,7 +69,6 @@ def test_place_order_is_normalized_and_validated():
         ("volume", True, "integer"),
         ("price", True, "numeric"),
         ("direction", "HOLD", "HOLD"),
-        ("offset", "NONE", "NONE"),
     ],
 )
 def test_invalid_place_order_values_are_rejected(field, value, message):
@@ -81,7 +79,6 @@ def test_invalid_place_order_values_are_rejected(field, value, message):
         "client_order_id": "gc-arb-1",
         "symbol": "COMEX:F:GC:2608",
         "direction": "BUY",
-        "offset": "OPEN",
         "price": 2400.5,
         "volume": 1,
     }
@@ -97,7 +94,6 @@ def test_order_identity_is_required():
                 "action": "place_order",
                 "symbol": "COMEX:F:GC:2608",
                 "direction": "BUY",
-                "offset": "OPEN",
                 "price": 2400.5,
                 "volume": 1,
             }

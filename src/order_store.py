@@ -18,7 +18,6 @@ class OrderStore(Protocol):
         strategy_id: str,
         client_order_id: str,
         symbol: str,
-        offset: str,
         payload: dict[str, Any],
     ) -> bool: ...
 
@@ -110,7 +109,6 @@ class MemoryOrderStore:
         strategy_id: str,
         client_order_id: str,
         symbol: str,
-        offset: str,
         payload: dict[str, Any],
     ) -> bool:
         key = self._key(client_id, strategy_id, client_order_id)
@@ -122,7 +120,6 @@ class MemoryOrderStore:
                 "strategy_id": strategy_id,
                 "client_order_id": client_order_id,
                 "symbol": symbol,
-                "offset": offset,
                 "tap_client_order_no": "",
                 "tap_order_no": "",
                 "tap_server_flag": "",
@@ -326,7 +323,6 @@ class PostgresOrderStore:
                     strategy_id TEXT NOT NULL,
                     client_order_id TEXT NOT NULL,
                     symbol TEXT NOT NULL,
-                    "offset" TEXT NOT NULL,
                     tap_client_order_no TEXT,
                     tap_order_no TEXT,
                     tap_server_flag TEXT,
@@ -338,6 +334,9 @@ class PostgresOrderStore:
                     UNIQUE (client_id, strategy_id, client_order_id)
                 )
                 """
+            )
+            connection.execute(
+                'ALTER TABLE tap_orders DROP COLUMN IF EXISTS "offset"'
             )
             connection.execute(
                 """
@@ -381,16 +380,14 @@ class PostgresOrderStore:
         strategy_id: str,
         client_order_id: str,
         symbol: str,
-        offset: str,
         payload: dict[str, Any],
     ) -> bool:
         with self._pool.connection() as connection:
             row = connection.execute(
                 """
                 INSERT INTO tap_orders
-                    (client_id, strategy_id, client_order_id, symbol, "offset",
-                     status, payload)
-                VALUES (%s, %s, %s, %s, %s, 'PENDING_SUBMIT', %s::jsonb)
+                    (client_id, strategy_id, client_order_id, symbol, status, payload)
+                VALUES (%s, %s, %s, %s, 'PENDING_SUBMIT', %s::jsonb)
                 ON CONFLICT (client_id, strategy_id, client_order_id) DO NOTHING
                 RETURNING id
                 """,
@@ -399,7 +396,6 @@ class PostgresOrderStore:
                     strategy_id,
                     client_order_id,
                     symbol,
-                    offset,
                     json.dumps(payload, ensure_ascii=False, sort_keys=True),
                 ),
             ).fetchone()

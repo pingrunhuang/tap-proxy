@@ -1,5 +1,5 @@
 services:
-  postgres:
+  tap-postgres:
     image: public.ecr.aws/docker/library/postgres:17-bookworm
     restart: unless-stopped
     environment:
@@ -27,9 +27,9 @@ services:
     environment:
       LANG: C
       LC_ALL: C
-      DATABASE_URL: postgresql://${POSTGRES_USER:-tap_proxy}:${POSTGRES_PASSWORD:-tap_proxy_change_me}@postgres:5432/${POSTGRES_DB:-tap_proxy}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-tap_proxy}:${POSTGRES_PASSWORD:-tap_proxy_change_me}@tap-postgres:5432/${POSTGRES_DB:-tap_proxy}
     depends_on:
-      postgres:
+      tap-postgres:
         condition: service_healthy
     ports:
       - "${ZMQ_PUB_PORT:-5575}:${ZMQ_PUB_PORT:-5575}"

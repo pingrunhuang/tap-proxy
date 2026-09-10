@@ -217,7 +217,6 @@ def test_commands_are_dispatched_to_native_session():
         "client_order_id": "order-1",
         "symbol": symbol,
         "direction": "BUY",
-        "offset": "OPEN",
         "price": 2400.5,
         "volume": 1,
     }

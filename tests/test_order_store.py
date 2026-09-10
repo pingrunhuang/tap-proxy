@@ -12,13 +12,11 @@ def test_memory_order_store_reserves_and_updates_mapping():
     assert store.reserve(
         **identity,
         symbol="LME:F:NI:3M",
-        offset="OPEN",
         payload={"direction": "BUY"},
     )
     assert not store.reserve(
         **identity,
         symbol="LME:F:NI:3M",
-        offset="OPEN",
         payload={"direction": "BUY"},
     )
 
@@ -42,7 +40,6 @@ def test_memory_order_store_reserves_and_updates_mapping():
         strategy_id="copper",
         client_order_id="order-2",
         symbol="LME:F:CU:3M",
-        offset="OPEN",
         payload={},
     )
     store.set_native(

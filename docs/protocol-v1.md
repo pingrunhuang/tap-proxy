@@ -179,7 +179,6 @@ PUB/SUB 恢复状态；重连后必须调用查询命令获取快照。
   "client_order_id": "gc-arb-20260728-000001",
   "symbol": "COMEX:F:GC:2608",
   "direction": "BUY",
-  "offset": "OPEN",
   "price": 2400.5,
   "volume": 1
 }
@@ -208,12 +207,7 @@ PUB/SUB 恢复状态；重连后必须调用查询命令获取快照。
 - `BUY`
 - `SELL`
 
-`offset`：
-
-- `OPEN`
-- `CLOSE`
-- `CLOSETODAY`
-- `CLOSEYESTERDAY`
+TAP 按净仓语义处理买卖，不接收开平标志。
 
 ### Cancel order
 
@@ -296,7 +290,6 @@ Topic：`orders.<account_id>`，有订单归属时同时发布
   "client_order_id": "gc-arb-20260728-000001",
   "symbol": "COMEX:F:GC:2608",
   "direction": "BUY",
-  "offset": "OPEN",
   "price": 2400.5,
   "volume": 1,
   "traded": 0,
@@ -331,7 +324,6 @@ Topic：`trades.<account_id>`，有订单归属时同时发布
   "trade_id": "MATCH-1",
   "symbol": "COMEX:F:GC:2608",
   "direction": "BUY",
-  "offset": "OPEN",
   "price": 2400.5,
   "volume": 1,
   "trade_time": "2026-07-28 10:31:05.456",
