@@ -379,6 +379,15 @@ class TapTradeApi(_NativeTdApi):
         last: Any,
         data: dict[str, Any],
     ) -> None:
+        logger.debug(
+            "OnRspQryFund session={} errorCode={} isLast={} data={}",
+            session,
+            errorCode,
+            last,
+            json.dumps(data, default=str, ensure_ascii=False, sort_keys=True)
+            if data is not None
+            else None,
+        )
         self.session.run_callback(
             "fund_query",
             self.session.on_fund_response,
