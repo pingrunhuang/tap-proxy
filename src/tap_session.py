@@ -389,7 +389,8 @@ class TapTradeApi(_NativeTdApi):
             else None,
         )
         currency = data.get("CurrencyNo", "USD")
-        if last=="Y" and currency=="USD":
+        group_no = data.get("CurrencyGroupNo", "OTHER")
+        if group_no=="OTHER" and currency=="USD":
             logger.debug(f"Publishing qualified data: {data}")
             self.session.run_callback(
                 "fund_query",
