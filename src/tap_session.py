@@ -388,14 +388,18 @@ class TapTradeApi(_NativeTdApi):
             if data is not None
             else None,
         )
-        self.session.run_callback(
-            "fund_query",
-            self.session.on_fund_response,
-            session,
-            errorCode,
-            last,
-            data,
-        )
+        is_last = data["isLast"]
+        currency = data["CurrencyNo"]
+        if is_last=="Y" and currency=="USD":
+            logger.debug(f"Publishing qualified data: {data}")
+            self.session.run_callback(
+                "fund_query",
+                self.session.on_fund_response,
+                session,
+                errorCode,
+                last,
+                data,
+            )
 
     def onRtnFund(self, data: dict[str, Any]) -> None:
         self.session.run_callback("fund", self.session.on_fund, data)
@@ -819,7 +823,7 @@ class NativeTapSession:
 
     def _update_account(self, data: dict[str, Any]) -> None:
         account_id = str(data.get("AccountNo", self.account_no))
-        balance = self._number(data.get("Balance")) or 0.0
+        balance = self._number(data.get("MarketEquity")) or 0.0
         available = self._number(data.get("Available")) or 0.0
         frozen_value = data.get("FrozenMargin")
         frozen = (
