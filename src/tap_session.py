@@ -388,8 +388,8 @@ class TapTradeApi(_NativeTdApi):
             if data is not None
             else None,
         )
-        is_last = data["isLast"]
-        currency = data["CurrencyNo"]
+        is_last = data.get("isLast", "Y")
+        currency = data.get("CurrencyNo", "USD")
         if is_last=="Y" and currency=="USD":
             logger.debug(f"Publishing qualified data: {data}")
             self.session.run_callback(
