@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -8,6 +9,7 @@ from tap_session import (
     ORDER_TYPE_LIMIT,
     SIDE_BUY,
     NativeTapSession,
+    TapTradeApi,
     TapUnavailableError,
     _trading_day_from_timestamp,
 )
@@ -207,6 +209,85 @@ def test_connect_runs_native_login_and_initial_snapshot_chain(native_session):
     ]
     assert any(topic == "account.TAP-ACCOUNT" for topic, _, _ in published)
     assert any(topic == "positions.TAP-ACCOUNT" for topic, _, _ in published)
+
+
+@pytest.mark.parametrize("last_data", [
+    {"CurrencyGroupNo": "OTHER", "CurrencyNo": "HKD", "MarketEquity": 99},
+    {"CurrencyGroupNo": "HKFE", "CurrencyNo": "USD", "MarketEquity": 99},
+    {},
+    None,
+])
+def test_fund_query_completes_after_filtered_or_empty_last_row(
+    native_session, monkeypatch, last_data,
+):
+    session, published = native_session
+    assert session.connect(0.5)
+    published.clear()
+    # Exercise the real native callback without constructing a native SDK API.
+    api = SimpleNamespace(session=session)
+
+    def reply(_request):
+        TapTradeApi.onRspQryFund(api, 10, 0, "N", {
+            "AccountNo": "TAP-ACCOUNT",
+            "CurrencyGroupNo": "OTHER",
+            "CurrencyNo": "USD",
+            "MarketEquity": 1234,
+            "Available": 1200,
+        })
+        assert not session._account_query_event.is_set()
+        TapTradeApi.onRspQryFund(api, 10, 0, "Y", last_data)
+
+    monkeypatch.setattr(session.td_api, "qryFund", reply)
+    account = session.query_account()
+    assert account["balance"] == 1234
+    assert account["currency"] == "USD"
+    assert session._account_query_event.is_set()
+    assert len([item for item in published if item[1] == "account"]) == 1
+
+
+@pytest.mark.parametrize("error_data", [
+    {"CurrencyGroupNo": "OTHER", "CurrencyNo": "HKD"},
+    {},
+    None,
+])
+def test_fund_query_error_releases_waiter_without_publishing(
+    native_session, monkeypatch, error_data,
+):
+    session, published = native_session
+    assert session.connect(0.5)
+    published.clear()
+    previous_account = dict(session._account_cache)
+    api = SimpleNamespace(session=session)
+
+    def reply(_request):
+        # Error handling must not depend on either data selection or isLast.
+        TapTradeApi.onRspQryFund(api, 11, 42, "N", error_data)
+
+    monkeypatch.setattr(session.td_api, "qryFund", reply)
+    with pytest.raises(RuntimeError, match="42"):
+        session.query_account()
+    assert session._account_query_event.is_set()
+    assert session._account_cache == previous_account
+    assert not any(item[1] == "account" for item in published)
+
+
+def test_filtered_fund_last_row_advances_initial_snapshot_chain(native_session):
+    session, published = native_session
+    assert session.connect(0.5)
+    session.initial_sync_event.clear()
+    session._account_query_event.clear()
+    session.td_api.calls.clear()
+    published.clear()
+    api = SimpleNamespace(session=session)
+
+    TapTradeApi.onRspQryFund(api, 12, 0, "Y", {
+        "CurrencyGroupNo": "HKFE", "CurrencyNo": "HKD",
+    })
+
+    assert session._account_query_event.is_set()
+    assert session.initial_sync_event.is_set()
+    assert ("qryPositionSummary", {}) in session.td_api.calls
+    assert not any(item[1] == "account" for item in published)
 
 
 def test_td_only_connect_skips_md_api(tmp_path):

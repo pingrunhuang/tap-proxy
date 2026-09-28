@@ -377,7 +377,7 @@ class TapTradeApi(_NativeTdApi):
         session: int,
         errorCode: int,
         last: Any,
-        data: dict[str, Any],
+        data: dict[str, Any] | None,
     ) -> None:
         logger.debug(
             "OnRspQryFund session={} errorCode={} isLast={} data={}",
@@ -388,18 +388,14 @@ class TapTradeApi(_NativeTdApi):
             if data is not None
             else None,
         )
-        currency = data.get("CurrencyNo", "USD")
-        group_no = data.get("CurrencyGroupNo", "OTHER")
-        if group_no=="OTHER" and currency=="USD":
-            logger.debug(f"Publishing qualified data: {data}")
-            self.session.run_callback(
-                "fund_query",
-                self.session.on_fund_response,
-                session,
-                errorCode,
-                last,
-                data,
-            )
+        self.session.run_callback(
+            "fund_query",
+            self.session.on_fund_response,
+            session,
+            errorCode,
+            last,
+            data,
+        )
 
     def onRtnFund(self, data: dict[str, Any]) -> None:
         self.session.run_callback("fund", self.session.on_fund, data)
@@ -798,7 +794,7 @@ class NativeTapSession:
         session: int,
         error_code: int,
         last: Any,
-        data: dict[str, Any],
+        data: dict[str, Any] | None,
     ) -> None:
         del session
         if error_code != SUCCESS:
@@ -809,7 +805,14 @@ class NativeTapSession:
                 "account",
             )
             return
-        if data:
+        # Filter account values only. Errors and the final-query marker must
+        # reach their handlers even for other currencies or empty responses.
+        if (
+            data
+            and data.get("CurrencyGroupNo", "OTHER") == "OTHER"
+            and data.get("CurrencyNo", "USD") == "USD"
+        ):
+            logger.debug("Publishing qualified data: {}", data)
             self._update_account(data)
         if self._is_last(last):
             self._account_cache_time = time.monotonic()
