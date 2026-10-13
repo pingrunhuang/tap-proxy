@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -6,8 +7,12 @@ import pytest
 from config import Settings
 from order_store import MemoryOrderStore
 from tap_session import (
+    MD_DISCONNECTED,
     ORDER_TYPE_LIMIT,
     SIDE_BUY,
+    TD_AUTH_FAILED,
+    TD_DISCONNECTED,
+    TD_LOGIN_FAILED,
     NativeTapSession,
     TapTradeApi,
     TapUnavailableError,
@@ -332,6 +337,142 @@ def test_td_ready_notification_code_is_not_treated_as_error(tmp_path):
         assert session.status()["initial_sync_ready"] is True
     finally:
         session.close()
+
+
+ENGINE_HARD_STOP_STATUSES = {
+    TD_DISCONNECTED,
+    TD_AUTH_FAILED,
+    TD_LOGIN_FAILED,
+    "SETTLEMENT_CONFIRM_FAILED",
+}
+
+
+def _status_payloads(published):
+    return [
+        data
+        for topic, event, data in published
+        if topic == "status.TAP" and event == "status"
+    ]
+
+
+def test_td_disconnect_publishes_named_status_and_stays_up(tmp_path):
+    published = []
+    settings = make_settings(tmp_path)
+    settings.reconnect_max_attempts = 1
+    settings.reconnect_initial_delay_seconds = 30
+    settings.reconnect_max_delay_seconds = 30
+    session = NativeTapSession(
+        settings,
+        lambda topic, event, data: published.append((topic, event, data)),
+        md_factory=FakeMdApi,
+        td_factory=FakeTdApi,
+        native_available=True,
+    )
+    try:
+        assert session.connect(0.5)
+        published.clear()
+
+        session.on_disconnect("TD", 2)
+
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline and not any(
+            item["reason"].startswith("reconnect attempt")
+            for item in _status_payloads(published)
+        ):
+            time.sleep(0.01)
+
+        payloads = _status_payloads(published)
+        disconnects = [
+            item for item in payloads if item.get("status") == TD_DISCONNECTED
+        ]
+        assert len(disconnects) == 1
+        payload = disconnects[0]
+        assert payload["ready"] is False
+        assert payload["td_ready"] is False
+        assert payload["reason"] == "TD disconnected: 2"
+        assert any(
+            item["reason"].startswith("reconnect attempt") for item in payloads
+        )
+        assert session.is_ready() is False
+        assert session._closing.is_set() is False
+        assert session.td_api is not None
+        assert session._reconnect_thread is not None
+        assert session._reconnect_thread.is_alive()
+    finally:
+        session.close()
+
+
+def test_md_only_disconnect_does_not_use_td_status(native_session):
+    session, published = native_session
+    assert session.connect(0.5)
+    published.clear()
+
+    session.on_disconnect("MD", 3)
+
+    payload = _status_payloads(published)[-1]
+    assert payload["status"] == MD_DISCONNECTED
+    assert not str(payload["status"]).startswith("TD_")
+    assert payload["status"] not in ENGINE_HARD_STOP_STATUSES
+    assert payload["td_ready"] is True
+    assert payload["md_ready"] is False
+    assert payload["ready"] is False
+    assert payload["reason"] == "MD disconnected: 3"
+    assert session.status()["td_ready"] is True
+
+
+def test_td_login_failure_publishes_named_status(native_session):
+    session, published = native_session
+    assert session.connect(0.5)
+    published.clear()
+
+    session.on_td_login(10008, {})
+
+    payload = _status_payloads(published)[-1]
+    assert payload["status"] == TD_LOGIN_FAILED
+    assert payload["ready"] is False
+    assert payload["td_ready"] is False
+    assert payload["reason"] == "TD login failed: 10008"
+    errors = [data for _topic, event, data in published if event == "error"]
+    assert errors[-1]["code"] == "td_login_failed"
+    assert session._closing.is_set() is False
+    assert session.td_api is not None
+
+
+@pytest.mark.parametrize("error_code", [-2, -14, -15, -16])
+def test_td_auth_failure_publishes_td_auth_failed(native_session, error_code):
+    session, published = native_session
+    published.clear()
+
+    session.on_td_login(error_code, {})
+
+    payload = _status_payloads(published)[-1]
+    assert payload["status"] == TD_AUTH_FAILED
+    assert payload["ready"] is False
+    assert payload["reason"] == f"TD login failed: {error_code}"
+    assert session._closing.is_set() is False
+
+
+def test_md_login_failure_does_not_publish_td_status(native_session):
+    session, published = native_session
+    published.clear()
+
+    session.on_md_login(10008, {})
+
+    assert _status_payloads(published) == []
+    errors = [data for _topic, event, data in published if event == "error"]
+    assert errors[-1]["code"] == "md_login_failed"
+
+
+def test_successful_connect_does_not_publish_hard_stop_status(native_session):
+    session, published = native_session
+    assert session.connect(0.5)
+
+    payloads = _status_payloads(published)
+    assert payloads
+    for payload in payloads:
+        assert "ready" in payload
+        assert "reason" in payload
+        assert payload.get("status") not in ENGINE_HARD_STOP_STATUSES
 
 
 def test_quote_is_converted_to_protocol_event(native_session):

@@ -64,6 +64,29 @@ ApiFactory = Callable[["NativeTapSession"], Any]
 SUCCESS = 0
 LAST_FLAGS = frozenset({"Y", 1, True})
 
+# CTP-family trader-session names. The trading engine hard-stops when
+# data.status is TD_DISCONNECTED, TD_AUTH_FAILED, TD_LOGIN_FAILED, or
+# SETTLEMENT_CONFIRM_FAILED. TAP has no settlement confirm. This process
+# only publishes the name and keeps reconnecting.
+TD_DISCONNECTED = "TD_DISCONNECTED"
+TD_AUTH_FAILED = "TD_AUTH_FAILED"
+TD_LOGIN_FAILED = "TD_LOGIN_FAILED"
+MD_DISCONNECTED = "MD_DISCONNECTED"
+# iTap codes for link authentication and authorization-code rejection.
+# Other nonzero login codes stay TD_LOGIN_FAILED.
+_TD_AUTH_ERROR_CODES = frozenset({
+    -2,  # TAPIERROR_LinkAuthFail
+    -14,  # TAPIERROR_AuthCode_Invalid
+    -15,  # TAPIERROR_AuthCode_Expired
+    -16,  # TAPIERROR_AuthCode_TypeNotMatch
+})
+
+
+def _trader_login_failure_status(error_code: int) -> str:
+    if error_code in _TD_AUTH_ERROR_CODES:
+        return TD_AUTH_FAILED
+    return TD_LOGIN_FAILED
+
 
 def _constant(name: str, fallback: str) -> str:
     return str(getattr(tap_td_constant, name, fallback))
@@ -700,9 +723,16 @@ class NativeTapSession:
 
     def on_td_login(self, error_code: int, data: dict[str, Any]) -> None:
         del data
-        if error_code != SUCCESS:
-            self.last_error = f"TD login failed: {error_code}"
-            self.publish_error("td_login_failed", self.last_error, retryable=True)
+        if error_code == SUCCESS:
+            return
+        self.td_ready_event.clear()
+        self.account_ready_event.clear()
+        self.last_error = f"TD login failed: {error_code}"
+        self.publish_error("td_login_failed", self.last_error, retryable=True)
+        self.publish_status(
+            self.last_error,
+            status=_trader_login_failure_status(error_code),
+        )
 
     def on_td_ready(self, code: int) -> None:
         self.td_ready_event.set()
@@ -713,11 +743,13 @@ class NativeTapSession:
     def on_disconnect(self, channel: str, reason: Any) -> None:
         if channel == "MD":
             self.md_ready_event.clear()
+            named_status = MD_DISCONNECTED
         else:
             self.td_ready_event.clear()
             self.account_ready_event.clear()
+            named_status = TD_DISCONNECTED
         self.last_error = f"{channel} disconnected: {reason}"
-        self.publish_status(self.last_error)
+        self.publish_status(self.last_error, status=named_status)
         if not self._closing.is_set():
             self._schedule_reconnect(self.last_error)
 
@@ -1521,22 +1553,21 @@ class NativeTapSession:
             retryable=False,
         )
 
-    def publish_status(self, reason: str) -> None:
-        logger.info("TAP status: {}", reason)
-        self.publish(
-            "status.TAP",
-            Event.STATUS.value,
-            {
-                "ready": self.is_ready(),
-                "md_enabled": self.settings.enable_md,
-                "md_ready": self.md_ready_event.is_set(),
-                "td_ready": self.td_ready_event.is_set(),
-                "account_ready": self.account_ready_event.is_set(),
-                "initial_sync_ready": self.initial_sync_event.is_set(),
-                "reason": reason,
-                "occurred_at": int(time.time() * 1000),
-            },
-        )
+    def publish_status(self, reason: str, *, status: str | None = None) -> None:
+        logger.info("TAP status: {} status={}", reason, status or "")
+        payload: dict[str, Any] = {
+            "ready": self.is_ready(),
+            "md_enabled": self.settings.enable_md,
+            "md_ready": self.md_ready_event.is_set(),
+            "td_ready": self.td_ready_event.is_set(),
+            "account_ready": self.account_ready_event.is_set(),
+            "initial_sync_ready": self.initial_sync_event.is_set(),
+            "reason": reason,
+            "occurred_at": int(time.time() * 1000),
+        }
+        if status:
+            payload["status"] = status
+        self.publish("status.TAP", Event.STATUS.value, payload)
 
     def publish_error(
         self,

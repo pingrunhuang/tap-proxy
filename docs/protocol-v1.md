@@ -372,10 +372,27 @@ Topic：`positions.<account_id>`，`event` 为 `position`。
   "ready": false,
   "md_ready": false,
   "td_ready": false,
-  "reason": "TD disconnected",
+  "reason": "TD disconnected: 2",
+  "status": "TD_DISCONNECTED",
   "occurred_at": 1785205865456
 }
 ```
+
+`ready` 与 `reason` 始终存在。`status` 只在需要具名会话状态时出现，名字与
+CTP 系交易会话一致，供交易引擎识别后自行硬停止。Proxy 只发布事件并继续
+重连，不会因为这些状态退出。
+
+交易通道：
+
+| `status` | 时机 |
+| --- | --- |
+| `TD_DISCONNECTED` | 交易通道断开 |
+| `TD_AUTH_FAILED` | 链路认证或授权码失败（TAP `-2`、`-14`、`-15`、`-16`） |
+| `TD_LOGIN_FAILED` | 其他交易登录失败 |
+
+行情通道单独断开时 `status` 为 `MD_DISCONNECTED`，并且 `td_ready` 保持
+原值。该事件不使用 `TD_*`。易盛 TAP 没有结算单确认，因此不会发布
+`SETTLEMENT_CONFIRM_FAILED`。
 
 `errors.TAP` 的 `event` 为 `error`：
 
