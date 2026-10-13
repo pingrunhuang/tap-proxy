@@ -19,7 +19,9 @@ from protocol import (
     Event,
     OrderStatus,
     TapSymbol,
+    TraderSessionStatus,
     market_data_topic,
+    trader_session_status_for_td_login,
 )
 
 
@@ -572,8 +574,12 @@ class NativeTapSession:
         for event in readiness_events:
             remaining = deadline - time.monotonic()
             if remaining <= 0 or not event.wait(remaining):
+                session_status = self._connect_timeout_session_status()
                 self.last_error = "TAP login readiness timeout"
-                self.publish_status(self.last_error)
+                self.publish_status(
+                    self.last_error,
+                    session_status=session_status,
+                )
                 return False
 
         self.reconnect_attempts = 0
@@ -688,6 +694,10 @@ class NativeTapSession:
         del data
         if error_code != SUCCESS:
             self.last_error = f"MD login failed: {error_code}"
+            self.publish_status(
+                self.last_error,
+                session_status=TraderSessionStatus.MD_LOGIN_FAILED.value,
+            )
             self.publish_error("md_login_failed", self.last_error, retryable=True)
 
     def on_md_ready(self) -> None:
@@ -702,6 +712,12 @@ class NativeTapSession:
         del data
         if error_code != SUCCESS:
             self.last_error = f"TD login failed: {error_code}"
+            self.publish_status(
+                self.last_error,
+                session_status=trader_session_status_for_td_login(
+                    error_code
+                ).value,
+            )
             self.publish_error("td_login_failed", self.last_error, retryable=True)
 
     def on_td_ready(self, code: int) -> None:
@@ -713,11 +729,13 @@ class NativeTapSession:
     def on_disconnect(self, channel: str, reason: Any) -> None:
         if channel == "MD":
             self.md_ready_event.clear()
+            session_status = TraderSessionStatus.MD_DISCONNECTED.value
         else:
             self.td_ready_event.clear()
             self.account_ready_event.clear()
+            session_status = TraderSessionStatus.TD_DISCONNECTED.value
         self.last_error = f"{channel} disconnected: {reason}"
-        self.publish_status(self.last_error)
+        self.publish_status(self.last_error, session_status=session_status)
         if not self._closing.is_set():
             self._schedule_reconnect(self.last_error)
 
@@ -1521,22 +1539,37 @@ class NativeTapSession:
             retryable=False,
         )
 
-    def publish_status(self, reason: str) -> None:
+    def _connect_timeout_session_status(self) -> str:
+        if self.settings.enable_md and not self.md_ready_event.is_set():
+            return TraderSessionStatus.MD_LOGIN_FAILED.value
+        if self.last_error.startswith("TD login failed:"):
+            code_text = self.last_error.rsplit(":", 1)[-1].strip()
+            try:
+                return trader_session_status_for_td_login(int(code_text)).value
+            except ValueError:
+                pass
+        return TraderSessionStatus.TD_LOGIN_FAILED.value
+
+    def publish_status(
+        self,
+        reason: str,
+        *,
+        session_status: str | None = None,
+    ) -> None:
         logger.info("TAP status: {}", reason)
-        self.publish(
-            "status.TAP",
-            Event.STATUS.value,
-            {
-                "ready": self.is_ready(),
-                "md_enabled": self.settings.enable_md,
-                "md_ready": self.md_ready_event.is_set(),
-                "td_ready": self.td_ready_event.is_set(),
-                "account_ready": self.account_ready_event.is_set(),
-                "initial_sync_ready": self.initial_sync_event.is_set(),
-                "reason": reason,
-                "occurred_at": int(time.time() * 1000),
-            },
-        )
+        payload: dict[str, Any] = {
+            "ready": self.is_ready(),
+            "md_enabled": self.settings.enable_md,
+            "md_ready": self.md_ready_event.is_set(),
+            "td_ready": self.td_ready_event.is_set(),
+            "account_ready": self.account_ready_event.is_set(),
+            "initial_sync_ready": self.initial_sync_event.is_set(),
+            "reason": reason,
+            "occurred_at": int(time.time() * 1000),
+        }
+        if session_status:
+            payload["status"] = session_status
+        self.publish("status.TAP", Event.STATUS.value, payload)
 
     def publish_error(
         self,

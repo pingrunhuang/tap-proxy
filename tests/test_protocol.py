@@ -3,6 +3,8 @@ from datetime import datetime, timezone
 import pytest
 
 from protocol import (
+    TraderSessionStatus,
+    trader_session_status_for_td_login,
     Action,
     ErrorCode,
     Event,
@@ -175,3 +177,14 @@ def test_event_and_error_envelopes_follow_schema_v1():
 
 def test_non_finite_values_are_safe_for_json():
     assert json_value({"price": float("inf")}) == {"price": None}
+
+
+def test_trader_session_status_maps_td_auth_errors():
+    assert (
+        trader_session_status_for_td_login(-14)
+        == TraderSessionStatus.TD_AUTH_FAILED
+    )
+    assert (
+        trader_session_status_for_td_login(10008)
+        == TraderSessionStatus.TD_LOGIN_FAILED
+    )
