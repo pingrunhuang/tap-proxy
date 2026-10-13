@@ -5,6 +5,7 @@ import pytest
 
 from config import Settings
 from order_store import MemoryOrderStore
+from protocol import TraderSessionStatus
 from tap_session import (
     ORDER_TYPE_LIMIT,
     SIDE_BUY,
@@ -657,3 +658,79 @@ def test_unavailable_native_library_fails_before_connecting(tmp_path):
     )
     with pytest.raises(TapUnavailableError, match="unavailable"):
         session.connect(0.1)
+
+
+def _status_events(published):
+    return [
+        data
+        for topic, event, data in published
+        if topic == "status.TAP" and event == "status"
+    ]
+
+
+def test_td_disconnect_publishes_named_trader_session_status(native_session):
+    session, published = native_session
+    assert session.connect(0.5)
+    published.clear()
+
+    session.on_disconnect("TD", 1001)
+
+    status = _status_events(published)[-1]
+    assert status["status"] == TraderSessionStatus.TD_DISCONNECTED.value
+    assert status["td_ready"] is False
+    assert "TD disconnected" in status["reason"]
+
+
+def test_md_disconnect_uses_md_status_not_td(native_session):
+    session, published = native_session
+    assert session.connect(0.5)
+    published.clear()
+
+    session.on_disconnect("MD", "network")
+
+    status = _status_events(published)[-1]
+    assert status["status"] == TraderSessionStatus.MD_DISCONNECTED.value
+    assert status["status"] != TraderSessionStatus.TD_DISCONNECTED.value
+    assert status["md_ready"] is False
+
+
+def test_td_login_failure_publishes_td_login_or_auth_status(tmp_path):
+    class BadPasswordTdApi(FakeTdApi):
+        def login(self, request):
+            self.session.on_td_login(10008, {})
+
+    class BadAuthTdApi(FakeTdApi):
+        def login(self, request):
+            self.session.on_td_login(-14, {})
+
+    for factory, expected in (
+        (BadPasswordTdApi, TraderSessionStatus.TD_LOGIN_FAILED),
+        (BadAuthTdApi, TraderSessionStatus.TD_AUTH_FAILED),
+    ):
+        published = []
+        session = NativeTapSession(
+            make_settings(tmp_path),
+            lambda topic, event, data: published.append((topic, event, data)),
+            md_factory=FakeMdApi,
+            td_factory=factory,
+            native_available=True,
+        )
+        try:
+            session.connect(0.5)
+            status = _status_events(published)[-1]
+            assert status["status"] == expected.value
+        finally:
+            session.close()
+
+
+def test_connected_status_omits_named_session_status(native_session):
+    session, published = native_session
+    assert session.connect(0.5)
+
+    connected = [
+        data
+        for topic, event, data in published
+        if topic == "status.TAP" and data.get("reason") == "connected"
+    ]
+    assert connected
+    assert "status" not in connected[-1]

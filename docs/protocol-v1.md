@@ -372,10 +372,16 @@ Topic：`positions.<account_id>`，`event` 为 `position`。
   "ready": false,
   "md_ready": false,
   "td_ready": false,
-  "reason": "TD disconnected",
+  "status": "TD_DISCONNECTED",
+  "reason": "TD disconnected: 1001",
   "occurred_at": 1785205865456
 }
 ```
+
+`data.status` 使用与 CTP 交易网关一致的命名（如 `TD_DISCONNECTED`、
+`TD_LOGIN_FAILED`、`TD_AUTH_FAILED`），供交易引擎在柜台断线或登录失败时
+硬停止。仅行情（MD）断线使用 `MD_DISCONNECTED` 等非 `TD_*` 名称。常规就绪
+或重连进度消息可省略 `status` 字段。
 
 `errors.TAP` 的 `event` 为 `error`：
 

@@ -59,6 +59,39 @@ class ErrorCode(str, Enum):
     INTERNAL_ERROR = "internal_error"
 
 
+class TraderSessionStatus(str, Enum):
+    """CTP-family session names on status.TAP ``data.status`` for engine hard-stop."""
+
+    TD_DISCONNECTED = "TD_DISCONNECTED"
+    TD_AUTH_FAILED = "TD_AUTH_FAILED"
+    TD_LOGIN_FAILED = "TD_LOGIN_FAILED"
+    MD_DISCONNECTED = "MD_DISCONNECTED"
+    MD_LOGIN_FAILED = "MD_LOGIN_FAILED"
+    SETTLEMENT_CONFIRM_FAILED = "SETTLEMENT_CONFIRM_FAILED"
+
+
+# iTapTradeAPI / TapQuoteAPI login errors that indicate AuthCode or license issues.
+TD_AUTH_ERROR_CODES = frozenset(
+    {
+        -45,
+        -16,
+        -15,
+        -14,
+        -2,
+        10004,
+        10031,
+        17001,
+        17002,
+    }
+)
+
+
+def trader_session_status_for_td_login(error_code: int) -> TraderSessionStatus:
+    if error_code in TD_AUTH_ERROR_CODES:
+        return TraderSessionStatus.TD_AUTH_FAILED
+    return TraderSessionStatus.TD_LOGIN_FAILED
+
+
 @dataclass(frozen=True, slots=True)
 class TapSymbol:
     exchange_no: str
