@@ -17,6 +17,8 @@ services:
       - "5402:5432"
 
   tap-proxy:
+    # Fixed locally-administered MAC (licensing / stable identity)
+    mac_address: "02:42:ac:11:00:11"
     build:
       context: .
       dockerfile: Dockerfile
