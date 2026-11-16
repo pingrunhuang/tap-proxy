@@ -509,6 +509,69 @@ def test_failed_order_duplicate_returns_failure_message(tmp_path):
         session.close()
 
 
+class FakeGbkOrderTdApi(FakeTdApi):
+    def insertOrder(self, request):
+        self.insert_requests.append(request)
+        return 0, 10, b"\xe2r5WVs"
+
+
+class FakeRejectedGbkOrderTdApi(FakeTdApi):
+    def insertOrder(self, request):
+        self.insert_requests.append(request)
+        return 42, 10, b"\xe2r5WVs"
+
+
+def test_place_order_decodes_gbk_client_order_no(tmp_path):
+    request = {
+        "client_id": "engine-01",
+        "strategy_id": "gc-arb",
+        "client_order_id": "gc-arb-gbk-1",
+        "symbol": SYMBOL,
+        "direction": "BUY",
+        "price": 2400.5,
+        "volume": 1,
+    }
+    session = NativeTapSession(
+        make_settings(tmp_path),
+        lambda *_args: None,
+        md_factory=FakeMdApi,
+        td_factory=FakeGbkOrderTdApi,
+        native_available=True,
+    )
+    try:
+        assert session.connect(0.5)
+        result = session.place_order(request)
+        assert result["accepted"] is True
+        assert result["tap_client_order_no"] == b"\xe2r5WVs".decode("gbk")
+    finally:
+        session.close()
+
+
+def test_failed_insert_skips_order_id_decode(tmp_path):
+    request = {
+        "client_id": "engine-01",
+        "strategy_id": "gc-arb",
+        "client_order_id": "gc-arb-gbk-failed-1",
+        "symbol": SYMBOL,
+        "direction": "BUY",
+        "price": 2400.5,
+        "volume": 1,
+    }
+    session = NativeTapSession(
+        make_settings(tmp_path),
+        lambda *_args: None,
+        md_factory=FakeMdApi,
+        td_factory=FakeRejectedGbkOrderTdApi,
+        native_available=True,
+    )
+    try:
+        assert session.connect(0.5)
+        with pytest.raises(RuntimeError, match="TAP insertOrder failed: 42"):
+            session.place_order(request)
+    finally:
+        session.close()
+
+
 def test_fill_uses_order_identity_and_publishes_strategy_topic(native_session):
     session, published = native_session
     assert session.connect(0.5)
