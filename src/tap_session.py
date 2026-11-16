@@ -1346,7 +1346,6 @@ class NativeTapSession:
                 message=str(exc),
             )
             raise
-        native_id = self._decode_order_id(raw_order_id)
         if error_id != SUCCESS:
             self.order_store.mark_failed(
                 client_id=request["client_id"],
@@ -1355,6 +1354,7 @@ class NativeTapSession:
                 message=f"TAP insertOrder failed: {error_id}",
             )
             raise RuntimeError(f"TAP insertOrder failed: {error_id}")
+        native_id = self._decode_order_id(raw_order_id)
         if not native_id:
             self.order_store.mark_failed(
                 client_id=request["client_id"],
@@ -1681,7 +1681,7 @@ class NativeTapSession:
                     + b"#"
                 )
                 raw = raw.replace(prefix, b"", 1)
-            return raw.decode()
+            return raw.decode("gbk", errors="replace")
         return str(value)
 
     @staticmethod
