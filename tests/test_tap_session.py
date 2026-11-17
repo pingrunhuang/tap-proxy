@@ -105,6 +105,7 @@ class FakeTdApi:
             "Y",
             {
                 "AccountNo": "TAP-ACCOUNT",
+                "CurrencyGroupNo": "HKFE",
                 "Balance": 100_000,
                 "Available": 97_500,
                 "FrozenMargin": 2_500,
@@ -214,7 +215,7 @@ def test_connect_runs_native_login_and_initial_snapshot_chain(native_session):
 
 @pytest.mark.parametrize("last_data", [
     {"CurrencyGroupNo": "OTHER", "CurrencyNo": "HKD", "MarketEquity": 99},
-    {"CurrencyGroupNo": "HKFE", "CurrencyNo": "USD", "MarketEquity": 99},
+    {"CurrencyGroupNo": "OTHER", "CurrencyNo": "USD", "MarketEquity": 99},
     {},
     None,
 ])
@@ -230,7 +231,7 @@ def test_fund_query_completes_after_filtered_or_empty_last_row(
     def reply(_request):
         TapTradeApi.onRspQryFund(api, 10, 0, "N", {
             "AccountNo": "TAP-ACCOUNT",
-            "CurrencyGroupNo": "OTHER",
+            "CurrencyGroupNo": "HKFE",
             "CurrencyNo": "USD",
             "MarketEquity": 1234,
             "Available": 1200,
@@ -289,6 +290,54 @@ def test_filtered_fund_last_row_advances_initial_snapshot_chain(native_session):
     assert session.initial_sync_event.is_set()
     assert ("qryPositionSummary", {}) in session.td_api.calls
     assert not any(item[1] == "account" for item in published)
+
+
+def test_fund_query_uses_hkfe_usd_not_other_residual_rows(
+    native_session, monkeypatch,
+):
+    session, published = native_session
+    assert session.connect(0.5)
+    published.clear()
+    api = SimpleNamespace(session=session)
+
+    def reply(_request):
+        TapTradeApi.onRspQryFund(api, 210, 0, "N", {
+            "AccountNo": "P001191A",
+            "CurrencyGroupNo": "HKFE",
+            "CurrencyNo": "USD",
+            "MarketEquity": 500000.0,
+            "Available": 500000.0,
+        })
+        TapTradeApi.onRspQryFund(api, 210, 0, "N", {
+            "AccountNo": "P001191A",
+            "CurrencyGroupNo": "OTHER",
+            "CurrencyNo": "CNH",
+            "MarketEquity": -2059.99999999964,
+            "Available": -135379.99999999965,
+        })
+        TapTradeApi.onRspQryFund(api, 210, 0, "Y", {
+            "AccountNo": "P001191A",
+            "CurrencyGroupNo": "OTHER",
+            "CurrencyNo": "USD",
+            "MarketEquity": -256.00000000017917,
+            "Available": -222934.72000000023,
+        })
+
+    monkeypatch.setattr(session.td_api, "qryFund", reply)
+    account = session.query_account()
+    assert account["balance"] == 500000.0
+    assert account["available"] == 500000.0
+    assert account["currency"] == "USD"
+    assert account["account_id"] == "P001191A"
+    TapTradeApi.onRtnFund(api, {
+        "AccountNo": "P001191A",
+        "CurrencyGroupNo": "OTHER",
+        "CurrencyNo": "USD",
+        "MarketEquity": -256.0,
+        "Available": -222934.72,
+    })
+    assert session._account_cache["balance"] == 500000.0
+    assert session._account_cache["available"] == 500000.0
 
 
 def test_td_only_connect_skips_md_api(tmp_path):
