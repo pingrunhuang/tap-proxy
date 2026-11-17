@@ -825,11 +825,10 @@ class NativeTapSession:
             return
         # Filter account values only. Errors and the final-query marker must
         # reach their handlers even for other currencies or empty responses.
-        if (
-            data
-            and data.get("CurrencyGroupNo", "OTHER") == "OTHER"
-            and data.get("CurrencyNo", "USD") == "USD"
-        ):
+        # Huatai TAP returns multiple fund rows; OTHER/USD is a residual
+        # bucket and must not be used as account equity. The trading
+        # account is CurrencyGroupNo=HKFE, CurrencyNo=USD.
+        if self._is_qualified_fund(data):
             logger.debug("Publishing qualified data: {}", data)
             self._update_account(data)
         if self._is_last(last):
@@ -839,8 +838,16 @@ class NativeTapSession:
                 self.td_api.qryPositionSummary({})
 
     def on_fund(self, data: dict[str, Any]) -> None:
-        if data:
+        if self._is_qualified_fund(data):
             self._update_account(data)
+
+    @staticmethod
+    def _is_qualified_fund(data: dict[str, Any] | None) -> bool:
+        return bool(
+            data
+            and data.get("CurrencyGroupNo") == "HKFE"
+            and data.get("CurrencyNo", "USD") == "USD"
+        )
 
     def _update_account(self, data: dict[str, Any]) -> None:
         account_id = str(data.get("AccountNo", self.account_no))
