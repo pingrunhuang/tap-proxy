@@ -529,6 +529,8 @@ class NativeTapSession:
         self._restore_order_mappings()
 
         self._account_cache: dict[str, Any] = {}
+        self._fund_rows: dict[tuple[str, str], dict[str, Any]] = {}
+        self._fund_query_buffer: dict[tuple[str, str], dict[str, Any]] = {}
         self._position_cache: dict[tuple[str, str], dict[str, Any]] = {}
         self._order_cache: dict[str, dict[str, Any]] = {}
         self._account_cache_time = 0.0
@@ -805,6 +807,7 @@ class NativeTapSession:
         self.account_no = str(data["AccountNo"])
         self.account_ready_event.set()
         assert self.td_api is not None
+        self._fund_query_buffer.clear()
         self.td_api.qryFund({"AccountNo": self.account_no})
 
     def on_fund_response(
@@ -816,6 +819,7 @@ class NativeTapSession:
     ) -> None:
         del session
         if error_code != SUCCESS:
+            self._fund_query_buffer.clear()
             self._query_failed(
                 "fund",
                 error_code,
@@ -823,49 +827,87 @@ class NativeTapSession:
                 "account",
             )
             return
-        # Filter account values only. Errors and the final-query marker must
-        # reach their handlers even for other currencies or empty responses.
-        # Huatai TAP returns multiple fund rows; OTHER/USD is a residual
-        # bucket and must not be used as account equity. The trading
-        # account is CurrencyGroupNo=HKFE, CurrencyNo=USD.
-        if self._is_qualified_fund(data):
-            logger.debug("Publishing qualified data: {}", data)
-            self._update_account(data)
+        # Huatai TAP returns one row per currency group. Totals are the
+        # TradeRate-converted sum of every row, published only after isLast
+        # so a mid-query bucket cannot become the account snapshot.
+        self._store_fund_row(self._fund_query_buffer, data)
         if self._is_last(last):
+            self._fund_rows = dict(self._fund_query_buffer)
+            self._fund_query_buffer.clear()
+            self._publish_aggregated_account()
             self._account_cache_time = time.monotonic()
             self._account_query_event.set()
             if self.td_api is not None and not self.initial_sync_event.is_set():
                 self.td_api.qryPositionSummary({})
 
     def on_fund(self, data: dict[str, Any]) -> None:
-        if self._is_qualified_fund(data):
-            self._update_account(data)
+        if self._store_fund_row(self._fund_rows, data):
+            self._publish_aggregated_account()
 
     @staticmethod
-    def _is_qualified_fund(data: dict[str, Any] | None) -> bool:
-        return bool(
-            data
-            and data.get("CurrencyGroupNo") == "HKFE"
-            and data.get("CurrencyNo", "USD") == "USD"
+    def _fund_row_key(data: dict[str, Any]) -> tuple[str, str]:
+        return (
+            str(data.get("CurrencyGroupNo") or ""),
+            str(data.get("CurrencyNo") or "USD"),
         )
 
-    def _update_account(self, data: dict[str, Any]) -> None:
-        account_id = str(data.get("AccountNo", self.account_no))
-        balance = self._number(data.get("MarketEquity")) or 0.0
-        available = self._number(data.get("Available")) or 0.0
-        frozen_value = data.get("FrozenMargin")
-        frozen = (
-            self._number(frozen_value)
-            if frozen_value is not None
-            else max(balance - available, 0.0)
+    @staticmethod
+    def _is_fund_value_row(data: dict[str, Any] | None) -> bool:
+        return bool(
+            data
+            and any(
+                data.get(field) is not None
+                for field in ("MarketEquity", "Available", "FrozenMargin")
+            )
         )
+
+    def _store_fund_row(
+        self,
+        rows: dict[tuple[str, str], dict[str, Any]],
+        data: dict[str, Any] | None,
+    ) -> bool:
+        if not self._is_fund_value_row(data):
+            return False
+        assert data is not None
+        rows[self._fund_row_key(data)] = data
+        return True
+
+    def _trade_rate(self, data: dict[str, Any]) -> float:
+        rate = self._number(data.get("TradeRate"))
+        if rate is None or rate == 0:
+            return 1.0
+        return rate
+
+    def _publish_aggregated_account(self) -> None:
+        if not self._fund_rows:
+            return
+        account_id = self.account_no
+        balance = 0.0
+        available = 0.0
+        frozen_sum = 0.0
+        has_frozen = False
+        for data in self._fund_rows.values():
+            rate = self._trade_rate(data)
+            balance += (self._number(data.get("MarketEquity")) or 0.0) * rate
+            available += (self._number(data.get("Available")) or 0.0) * rate
+            if data.get("FrozenMargin") is not None:
+                frozen_sum += (self._number(data.get("FrozenMargin")) or 0.0) * rate
+                has_frozen = True
+            if data.get("AccountNo"):
+                account_id = str(data["AccountNo"])
+        frozen = frozen_sum if has_frozen else max(balance - available, 0.0)
         account = {
             "account_id": account_id,
             "balance": balance,
             "frozen": frozen,
             "available": available,
-            "currency": str(data.get("CurrencyNo", "")),
+            "currency": "USD",
         }
+        logger.debug(
+            "Publishing aggregated fund totals: {} from {} rows",
+            account,
+            len(self._fund_rows),
+        )
         self.account_no = account_id
         self._account_cache = account
         self._account_cache_time = time.monotonic()
@@ -1204,6 +1246,7 @@ class NativeTapSession:
         with self._account_query_lock:
             self._query_errors.pop("account", None)
             self._account_query_event.clear()
+            self._fund_query_buffer.clear()
             assert self.td_api is not None
             if self.account_no:
                 self.td_api.qryFund({"AccountNo": self.account_no})

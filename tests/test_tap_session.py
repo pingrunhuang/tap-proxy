@@ -241,7 +241,11 @@ def test_fund_query_completes_after_filtered_or_empty_last_row(
 
     monkeypatch.setattr(session.td_api, "qryFund", reply)
     account = session.query_account()
-    assert account["balance"] == 1234
+    expected_balance = 1234.0
+    if last_data and last_data.get("MarketEquity") is not None:
+        expected_balance += float(last_data["MarketEquity"])
+    assert account["balance"] == expected_balance
+    assert account["available"] == 1200
     assert account["currency"] == "USD"
     assert session._account_query_event.is_set()
     assert len([item for item in published if item[1] == "account"]) == 1
@@ -292,52 +296,76 @@ def test_filtered_fund_last_row_advances_initial_snapshot_chain(native_session):
     assert not any(item[1] == "account" for item in published)
 
 
-def test_fund_query_uses_hkfe_usd_not_other_residual_rows(
+def _converted_fund_totals(*rows: dict) -> tuple[float, float]:
+    balance = 0.0
+    available = 0.0
+    for row in rows:
+        rate = float(row.get("TradeRate") or 1.0) or 1.0
+        balance += float(row.get("MarketEquity") or 0.0) * rate
+        available += float(row.get("Available") or 0.0) * rate
+    return balance, available
+
+
+def test_fund_query_aggregates_all_rows_with_trade_rate(
     native_session, monkeypatch,
 ):
     session, published = native_session
     assert session.connect(0.5)
     published.clear()
     api = SimpleNamespace(session=session)
-
-    def reply(_request):
-        TapTradeApi.onRspQryFund(api, 210, 0, "N", {
-            "AccountNo": "P001191A",
-            "CurrencyGroupNo": "HKFE",
-            "CurrencyNo": "USD",
-            "MarketEquity": 500000.0,
-            "Available": 500000.0,
-        })
-        TapTradeApi.onRspQryFund(api, 210, 0, "N", {
-            "AccountNo": "P001191A",
-            "CurrencyGroupNo": "OTHER",
-            "CurrencyNo": "CNH",
-            "MarketEquity": -2059.99999999964,
-            "Available": -135379.99999999965,
-        })
-        TapTradeApi.onRspQryFund(api, 210, 0, "Y", {
-            "AccountNo": "P001191A",
-            "CurrencyGroupNo": "OTHER",
-            "CurrencyNo": "USD",
-            "MarketEquity": -256.00000000017917,
-            "Available": -222934.72000000023,
-        })
-
-    monkeypatch.setattr(session.td_api, "qryFund", reply)
-    account = session.query_account()
-    assert account["balance"] == 500000.0
-    assert account["available"] == 500000.0
-    assert account["currency"] == "USD"
-    assert account["account_id"] == "P001191A"
-    TapTradeApi.onRtnFund(api, {
+    hkfe_usd = {
+        "AccountNo": "P001191A",
+        "CurrencyGroupNo": "HKFE",
+        "CurrencyNo": "USD",
+        "TradeRate": 1.0,
+        "MarketEquity": 500000.0,
+        "Available": 500000.0,
+    }
+    other_cnh = {
+        "AccountNo": "P001191A",
+        "CurrencyGroupNo": "OTHER",
+        "CurrencyNo": "CNH",
+        "TradeRate": 0.15004,
+        "MarketEquity": -2059.99999999964,
+        "Available": -135379.99999999965,
+    }
+    other_usd = {
         "AccountNo": "P001191A",
         "CurrencyGroupNo": "OTHER",
         "CurrencyNo": "USD",
-        "MarketEquity": -256.0,
-        "Available": -222934.72,
-    })
-    assert session._account_cache["balance"] == 500000.0
-    assert session._account_cache["available"] == 500000.0
+        "TradeRate": 1.0,
+        "MarketEquity": -256.00000000017917,
+        "Available": -222934.72000000023,
+    }
+
+    def reply(_request):
+        TapTradeApi.onRspQryFund(api, 210, 0, "N", hkfe_usd)
+        assert not any(item[1] == "account" for item in published)
+        TapTradeApi.onRspQryFund(api, 210, 0, "N", other_cnh)
+        assert not any(item[1] == "account" for item in published)
+        TapTradeApi.onRspQryFund(api, 210, 0, "Y", other_usd)
+
+    monkeypatch.setattr(session.td_api, "qryFund", reply)
+    account = session.query_account()
+    expected_balance, expected_available = _converted_fund_totals(
+        hkfe_usd, other_cnh, other_usd
+    )
+    assert account["balance"] == pytest.approx(expected_balance)
+    assert account["available"] == pytest.approx(expected_available)
+    assert account["currency"] == "USD"
+    assert account["account_id"] == "P001191A"
+    updated_other_usd = {
+        **other_usd,
+        "MarketEquity": -100.0,
+        "Available": -200000.0,
+    }
+    TapTradeApi.onRtnFund(api, updated_other_usd)
+    updated_balance, updated_available = _converted_fund_totals(
+        hkfe_usd, other_cnh, updated_other_usd
+    )
+    assert session._account_cache["balance"] == pytest.approx(updated_balance)
+    assert session._account_cache["available"] == pytest.approx(updated_available)
+    assert session._account_cache["balance"] != pytest.approx(expected_balance)
 
 
 def test_td_only_connect_skips_md_api(tmp_path):
