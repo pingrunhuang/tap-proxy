@@ -170,6 +170,8 @@ class TapSession(Protocol):
 
     def query_account(self, max_age_seconds: float | None = None) -> dict[str, Any]: ...
 
+    def query_fund(self, max_age_seconds: float | None = None) -> dict[str, Any]: ...
+
     def query_positions(
         self,
         max_age_seconds: float | None = None,
@@ -235,6 +237,10 @@ class PendingTapSession:
         self._not_implemented()
 
     def query_account(self, max_age_seconds: float | None = None) -> dict[str, Any]:
+        del max_age_seconds
+        self._not_implemented()
+
+    def query_fund(self, max_age_seconds: float | None = None) -> dict[str, Any]:
         del max_age_seconds
         self._not_implemented()
 
@@ -529,6 +535,8 @@ class NativeTapSession:
         self._restore_order_mappings()
 
         self._account_cache: dict[str, Any] = {}
+        self._fund_rows: dict[tuple[str, str], dict[str, Any]] = {}
+        self._fund_query_buffer: dict[tuple[str, str], dict[str, Any]] = {}
         self._position_cache: dict[tuple[str, str], dict[str, Any]] = {}
         self._order_cache: dict[str, dict[str, Any]] = {}
         self._account_cache_time = 0.0
@@ -805,6 +813,7 @@ class NativeTapSession:
         self.account_no = str(data["AccountNo"])
         self.account_ready_event.set()
         assert self.td_api is not None
+        self._fund_query_buffer.clear()
         self.td_api.qryFund({"AccountNo": self.account_no})
 
     def on_fund_response(
@@ -816,6 +825,7 @@ class NativeTapSession:
     ) -> None:
         del session
         if error_code != SUCCESS:
+            self._fund_query_buffer.clear()
             self._query_failed(
                 "fund",
                 error_code,
@@ -823,23 +833,24 @@ class NativeTapSession:
                 "account",
             )
             return
-        # Filter account values only. Errors and the final-query marker must
-        # reach their handlers even for other currencies or empty responses.
-        # Huatai TAP returns multiple fund rows; OTHER/USD is a residual
-        # bucket and must not be used as account equity. The trading
-        # account is CurrencyGroupNo=HKFE, CurrencyNo=USD.
+        # Keep every currency-group value row for qry_fund. get_account still
+        # publishes only the HKFE/USD snapshot (OTHER/USD is a residual bucket).
+        self._store_fund_row(self._fund_query_buffer, data)
         if self._is_qualified_fund(data):
             logger.debug("Publishing qualified data: {}", data)
             self._update_account(data)
         if self._is_last(last):
+            self._fund_rows = dict(self._fund_query_buffer)
+            self._fund_query_buffer.clear()
             self._account_cache_time = time.monotonic()
             self._account_query_event.set()
             if self.td_api is not None and not self.initial_sync_event.is_set():
                 self.td_api.qryPositionSummary({})
 
     def on_fund(self, data: dict[str, Any]) -> None:
-        if self._is_qualified_fund(data):
-            self._update_account(data)
+        if self._store_fund_row(self._fund_rows, data) or self._is_qualified_fund(data):
+            if self._is_qualified_fund(data):
+                self._update_account(data)
 
     @staticmethod
     def _is_qualified_fund(data: dict[str, Any] | None) -> bool:
@@ -848,6 +859,50 @@ class NativeTapSession:
             and data.get("CurrencyGroupNo") == "HKFE"
             and data.get("CurrencyNo", "USD") == "USD"
         )
+
+    @staticmethod
+    def _fund_row_key(data: dict[str, Any]) -> tuple[str, str]:
+        return (
+            str(data.get("CurrencyGroupNo") or ""),
+            str(data.get("CurrencyNo") or "USD"),
+        )
+
+    @staticmethod
+    def _is_fund_value_row(data: dict[str, Any] | None) -> bool:
+        return bool(
+            data
+            and any(
+                data.get(field) is not None
+                for field in ("MarketEquity", "Available", "FrozenMargin")
+            )
+        )
+
+    def _store_fund_row(
+        self,
+        rows: dict[tuple[str, str], dict[str, Any]],
+        data: dict[str, Any] | None,
+    ) -> bool:
+        if not self._is_fund_value_row(data):
+            return False
+        assert data is not None
+        rows[self._fund_row_key(data)] = self._fund_row_payload(data)
+        return True
+
+    def _fund_row_payload(self, data: dict[str, Any]) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "account_id": str(data.get("AccountNo", self.account_no)),
+            "currency_group": str(data.get("CurrencyGroupNo") or ""),
+            "currency": str(data.get("CurrencyNo") or "USD"),
+        }
+        for field, key in (
+            ("MarketEquity", "market_equity"),
+            ("Available", "available"),
+            ("FrozenMargin", "frozen_margin"),
+            ("TradeRate", "trade_rate"),
+        ):
+            if data.get(field) is not None:
+                payload[key] = self._number(data.get(field))
+        return payload
 
     def _update_account(self, data: dict[str, Any]) -> None:
         account_id = str(data.get("AccountNo", self.account_no))
@@ -1198,11 +1253,32 @@ class NativeTapSession:
         self,
         max_age_seconds: float | None = None,
     ) -> dict[str, Any]:
+        self._refresh_fund_query(max_age_seconds)
+        return dict(self._account_cache)
+
+    def query_fund(
+        self,
+        max_age_seconds: float | None = None,
+    ) -> dict[str, Any]:
+        self._refresh_fund_query(max_age_seconds)
+        return {
+            "account_id": self.account_no,
+            "funds": [dict(row) for row in self._fund_rows.values()],
+        }
+
+    def _refresh_fund_query(self, max_age_seconds: float | None = None) -> None:
         self._require_ready()
-        if self._cache_fresh(self._account_cache_time, max_age_seconds):
-            return dict(self._account_cache)
+        if self._cache_fresh(self._account_cache_time, max_age_seconds) and (
+            self._fund_rows or self._account_cache
+        ):
+            return
         with self._account_query_lock:
+            if self._cache_fresh(self._account_cache_time, max_age_seconds) and (
+                self._fund_rows or self._account_cache
+            ):
+                return
             self._query_errors.pop("account", None)
+            self._fund_query_buffer.clear()
             self._account_query_event.clear()
             assert self.td_api is not None
             if self.account_no:
@@ -1211,7 +1287,6 @@ class NativeTapSession:
                 self.td_api.qryAccount({})
             self._wait_query(self._account_query_event, "account")
             self._raise_query_error("account")
-            return dict(self._account_cache)
 
     def query_positions(
         self,

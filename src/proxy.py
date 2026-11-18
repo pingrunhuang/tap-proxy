@@ -214,6 +214,11 @@ class TapProxy:
                     self.session.query_account(self._max_age_seconds(normalized)),
                     request_id,
                 )
+            if action is Action.QRY_FUND:
+                return response_ok(
+                    self.session.query_fund(self._max_age_seconds(normalized)),
+                    request_id,
+                )
             if action is Action.GET_POSITIONS:
                 return response_ok(
                     self.session.query_positions(self._max_age_seconds(normalized)),

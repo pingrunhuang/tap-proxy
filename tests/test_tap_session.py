@@ -340,6 +340,49 @@ def test_fund_query_uses_hkfe_usd_not_other_residual_rows(
     assert session._account_cache["available"] == 500000.0
 
 
+def test_qry_fund_returns_all_currency_group_rows(native_session, monkeypatch):
+    session, published = native_session
+    assert session.connect(0.5)
+    published.clear()
+    api = SimpleNamespace(session=session)
+
+    def reply(_request):
+        TapTradeApi.onRspQryFund(api, 210, 0, "N", {
+            "AccountNo": "P001191A",
+            "CurrencyGroupNo": "HKFE",
+            "CurrencyNo": "USD",
+            "MarketEquity": 500000.0,
+            "Available": 500000.0,
+            "TradeRate": 1.0,
+        })
+        TapTradeApi.onRspQryFund(api, 210, 0, "N", {
+            "AccountNo": "P001191A",
+            "CurrencyGroupNo": "OTHER",
+            "CurrencyNo": "CNH",
+            "MarketEquity": -2059.99999999964,
+            "Available": -135379.99999999965,
+            "TradeRate": 0.15004,
+        })
+        TapTradeApi.onRspQryFund(api, 210, 0, "Y", {
+            "AccountNo": "P001191A",
+            "CurrencyGroupNo": "OTHER",
+            "CurrencyNo": "USD",
+            "MarketEquity": -256.00000000017917,
+            "Available": -222934.72000000023,
+            "TradeRate": 1.0,
+        })
+
+    monkeypatch.setattr(session.td_api, "qryFund", reply)
+    result = session.query_fund()
+    assert result["account_id"] == "P001191A"
+    funds = {(row["currency_group"], row["currency"]): row for row in result["funds"]}
+    assert funds[("HKFE", "USD")]["market_equity"] == 500000.0
+    assert funds[("OTHER", "CNH")]["trade_rate"] == 0.15004
+    assert funds[("OTHER", "USD")]["available"] == -222934.72000000023
+    # get_account snapshot is unchanged: still HKFE/USD only.
+    assert session.query_account(60)["balance"] == 500000.0
+
+
 def test_td_only_connect_skips_md_api(tmp_path):
     config = make_settings(tmp_path)
     config.enable_md = False
