@@ -873,7 +873,7 @@ class NativeTapSession:
             data
             and any(
                 data.get(field) is not None
-                for field in ("MarketEquity", "Available", "FrozenMargin")
+                for field in ("MarketEquity", "Equity", "Available", "FrozenMargin")
             )
         )
 
@@ -896,6 +896,7 @@ class NativeTapSession:
         }
         for field, key in (
             ("MarketEquity", "market_equity"),
+            ("Equity", "equity"),
             ("Available", "available"),
             ("FrozenMargin", "frozen_margin"),
             ("TradeRate", "trade_rate"),

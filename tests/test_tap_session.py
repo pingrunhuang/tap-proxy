@@ -352,6 +352,7 @@ def test_qry_fund_returns_all_currency_group_rows(native_session, monkeypatch):
             "CurrencyGroupNo": "HKFE",
             "CurrencyNo": "USD",
             "MarketEquity": 500000.0,
+            "Equity": 490000.0,
             "Available": 500000.0,
             "TradeRate": 1.0,
         })
@@ -360,6 +361,7 @@ def test_qry_fund_returns_all_currency_group_rows(native_session, monkeypatch):
             "CurrencyGroupNo": "OTHER",
             "CurrencyNo": "CNH",
             "MarketEquity": -2059.99999999964,
+            "Equity": -2059.99999999964,
             "Available": -135379.99999999965,
             "TradeRate": 0.15004,
         })
@@ -368,6 +370,7 @@ def test_qry_fund_returns_all_currency_group_rows(native_session, monkeypatch):
             "CurrencyGroupNo": "OTHER",
             "CurrencyNo": "USD",
             "MarketEquity": -256.00000000017917,
+            "Equity": -256.00000000017917,
             "Available": -222934.72000000023,
             "TradeRate": 1.0,
         })
@@ -377,6 +380,8 @@ def test_qry_fund_returns_all_currency_group_rows(native_session, monkeypatch):
     assert result["account_id"] == "P001191A"
     funds = {(row["currency_group"], row["currency"]): row for row in result["funds"]}
     assert funds[("HKFE", "USD")]["market_equity"] == 500000.0
+    assert funds[("HKFE", "USD")]["equity"] == 490000.0
+    assert funds[("OTHER", "CNH")]["equity"] == -2059.99999999964
     assert funds[("OTHER", "CNH")]["trade_rate"] == 0.15004
     assert funds[("OTHER", "USD")]["available"] == -222934.72000000023
     # get_account snapshot is unchanged: still HKFE/USD only.

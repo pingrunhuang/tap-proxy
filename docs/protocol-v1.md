@@ -176,6 +176,7 @@ PUB/SUB 恢复状态；重连后必须调用查询命令获取快照。
       "currency_group": "HKFE",
       "currency": "USD",
       "market_equity": 500000,
+      "equity": 500000,
       "available": 500000,
       "trade_rate": 1.0
     }
