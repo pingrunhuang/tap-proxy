@@ -34,6 +34,22 @@ class FakeNativeSession:
         self.query_calls.append(("account", max_age_seconds))
         return {"account_id": "TAP-ACCOUNT"}
 
+    def query_fund(self, max_age_seconds=None):
+        self.query_calls.append(("fund", max_age_seconds))
+        return {
+            "account_id": "TAP-ACCOUNT",
+            "funds": [
+                {
+                    "account_id": "TAP-ACCOUNT",
+                    "currency_group": "HKFE",
+                    "currency": "USD",
+                    "market_equity": 500000,
+                    "available": 500000,
+                    "trade_rate": 1.0,
+                }
+            ],
+        }
+
     def query_positions(self, max_age_seconds=None):
         self.query_calls.append(("positions", max_age_seconds))
         return []
@@ -191,6 +207,9 @@ def test_commands_are_dispatched_to_native_session():
     account = instance.handle_command(
         {"action": "get_account", "max_age_ms": 5000}
     )
+    funds = instance.handle_command(
+        {"action": "qry_fund", "max_age_ms": 5000}
+    )
     positions = instance.handle_command(
         {"action": "get_positions", "force_refresh": True}
     )
@@ -234,9 +253,11 @@ def test_commands_are_dispatched_to_native_session():
     assert second["data"]["newly_active"] == []
     assert session.subscribed == [[symbol], []]
     assert account["data"]["account_id"] == "TAP-ACCOUNT"
+    assert funds["data"]["funds"][0]["currency_group"] == "HKFE"
     assert positions["status"] == "ok"
     assert session.query_calls == [
         ("account", 5.0),
+        ("fund", 5.0),
         ("positions", None),
         ("trades", "engine", "a", 0, 25),
         ("trade_cursor", "engine", "a"),

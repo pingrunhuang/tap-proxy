@@ -154,6 +154,7 @@ COMEX:F:GC:2608
 
 ```json
 {"action":"get_account","request_id":"account-1"}
+{"action":"qry_fund","request_id":"fund-1"}
 {"action":"get_positions","request_id":"positions-1","force_refresh":true}
 {"action":"get_orders","request_id":"orders-1","max_age_ms":5000}
 {"action":"get_trades","request_id":"trades-1","client_id":"engine-01","strategy_id":"gc-arb","after_id":0,"limit":500}
@@ -161,6 +162,26 @@ COMEX:F:GC:2608
 
 查询响应中的 `data` 分别为账户对象、持仓数组和订单数组。客户端不能只依赖
 PUB/SUB 恢复状态；重连后必须调用查询命令获取快照。
+
+`qry_fund` 触发 TAP `qryFund`，并返回该账户全部币种组资金行（含 `TradeRate`），
+供客户端自行加总总资产和总可用。`get_account` 仍只返回 `HKFE/USD` 账户快照。
+`qry_fund.data`：
+
+```json
+{
+  "account_id": "TAP_ACCOUNT",
+  "funds": [
+    {
+      "account_id": "TAP_ACCOUNT",
+      "currency_group": "HKFE",
+      "currency": "USD",
+      "market_equity": 500000,
+      "available": 500000,
+      "trade_rate": 1.0
+    }
+  ]
+}
+```
 
 成交在发布前持久化到 PostgreSQL。`get_trades` 只返回指定 owner 的记录，
 并通过 `next_after_id` 和 `has_more` 分页，供 Engine 恢复断线期间漏收的成交。

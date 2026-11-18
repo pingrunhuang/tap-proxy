@@ -18,6 +18,7 @@ class Action(str, Enum):
     SUBSCRIBE_MARKET_DATA = "subscribe_market_data"
     UNSUBSCRIBE_MARKET_DATA = "unsubscribe_market_data"
     GET_ACCOUNT = "get_account"
+    QRY_FUND = "qry_fund"
     GET_POSITIONS = "get_positions"
     GET_ORDERS = "get_orders"
     GET_TRADES = "get_trades"
@@ -254,6 +255,7 @@ def validate_request(request: Any) -> tuple[Action, dict[str, Any]]:
 
     elif action in {
         Action.GET_ACCOUNT,
+        Action.QRY_FUND,
         Action.GET_POSITIONS,
         Action.GET_ORDERS,
     }:
